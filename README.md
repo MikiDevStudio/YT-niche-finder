@@ -60,6 +60,7 @@ database.
 - [Quick start](#quick-start)
 - [Repository layout](#repository-layout)
 - [Contributing](#contributing)
+- [Privacy](#privacy)
 - [Changelog](#changelog)
 - [Read next](#read-next)
 
@@ -172,6 +173,14 @@ bigger (a new MCP tool, API endpoint, or dashboard screen), please open an
 issue first to agree on the shape. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a dev environment and
 run the test suite.
+
+## Privacy
+
+Self-hosted, no telemetry, no account: everything stays in your own Postgres,
+and the app contacts exactly two external hosts — `www.googleapis.com` for the
+YouTube Data API and `www.youtube.com` for channel RSS feeds. Comments read by
+`video_comments` are never stored. See [PRIVACY.md](PRIVACY.md) for the full
+picture, including what the first run downloads and how to delete everything.
 
 ## Changelog
 

@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `untrack_channel` keeps what was collected, and `calibrate_maturity_curve`
   writes nothing at all.
 
+- **[PRIVACY.md](PRIVACY.md)** — what the project stores, where its traffic
+  goes, and how to delete everything, linked from the README. Every claim is
+  checked against the code: no telemetry, comments read by `video_comments`
+  are never stored, and the application contacts exactly two external hosts
+  (`www.googleapis.com` and `www.youtube.com`). It also records what a source
+  scan misses — the embedding model is fetched from Hugging Face on first run
+  — and what one gets wrong: `www.w3.org` is the Atom namespace identifier in
+  `rss.py`, not a host anything connects to.
+
 ### Fixed
 
 - **`scripts/mcp-docker.sh` больше не полагается на `docker run --env-file`.**

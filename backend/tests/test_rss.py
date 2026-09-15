@@ -62,6 +62,7 @@ def _run_all():
         except Exception as e:  # pragma: no cover
             print(f"ERROR {name}: {e!r}")
     print(f"\n{passed}/{len(tests)} прошло")
+    sys.exit(0 if passed == len(tests) else 1)  # иначе CI зеленеет при упавших тестах
 
 
 class _FakeMonkeypatch:

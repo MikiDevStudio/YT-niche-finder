@@ -98,7 +98,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   попаданию в базу» explicitly.
 - **Test runners fail the process on a failed test.** `test_mcp_tools.py`,
   `test_http_rate_limit.py` and `test_http_api.py` printed FAIL but exited 0,
-  so CI stayed green with broken tests.
+  so CI stayed green with broken tests. The same held for the `_run_all`
+  runners of eight more files (#13), which CI did not run at all: CI now also
+  runs `test_inspection`, `test_metadata_review`, `test_alerts`,
+  `test_alerts_domain`, `test_library`, `test_rss`, `test_top_tags`,
+  `test_keywords_domain` and `test_metadata_domain`, one process per file.
 - **`collect_channel(..., niche=X)` now creates the niche row.** It used to
   write only `video_niches`, so `list_niches` and the dashboard's niche picker
   never showed a niche built from channels. The niche is slugified like

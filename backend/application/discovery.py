@@ -88,14 +88,17 @@ PERIOD_COLUMNS = {
 }
 
 
-def load_window(period="7d", offset=0, ref=None, period_by="published", **filters):
+def load_window(period="7d", offset=0, ref=None, period_by="published",
+                outlier_base="rolling", **filters):
     """Rows inside the window, enriched with every metric we can compute.
 
     `offset=1` returns the immediately preceding window (for growth comparisons).
     `period_by` selects which timestamp the window filters on -- see
     PERIOD_COLUMNS. Age, VPH and maturity are ALWAYS measured from the real
     publication date regardless, because that is what they mean.
+    `outlier_base` picks the baseline outlierScore follows -- see M.OUTLIER_BASES.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     column = PERIOD_COLUMNS.get(period_by, PERIOD_COLUMNS["published"])
     start, end = P.window(period, ref=ref, offset=offset)
     languages = filters.pop("languages", None)
@@ -123,20 +126,24 @@ def load_window(period="7d", offset=0, ref=None, period_by="published", **filter
     if only_shorts:
         rows = [r for r in rows if r["is_short"]]
 
-    _enrich(conn, rows, ref=ref)
+    _enrich(conn, rows, ref=ref, outlier_base=outlier_base)
     conn.close()
     return rows
 
 
-def _channel_baselines(conn, channel_ids, n=M.DEFAULT_BASELINE_N):
-    """Median views of the previous `n` long-form uploads, per (channel, video).
+def _channel_baselines(conn, channel_ids, n=M.DEFAULT_BASELINE_N, ref=None, want=None):
+    """Both outlier baselines per video: {video_id: {rolling, period, periodScope}}.
 
-    This is the ViewStats / 1of10 style baseline. NexLev uses a lifetime mean
-    instead, which one viral video wrecks -- we keep their number too, as
+    rolling -- median views of the previous `n` long-form uploads, the
+    ViewStats / 1of10 style baseline. NexLev uses a lifetime mean instead,
+    which one viral video wrecks -- we keep their number too, as
     `outlierScoreNexlev`, so results stay comparable with their UI.
+    period -- median of the channel's mature long-form uploads around the
+    publication date (M.baseline_period), computed only for the `want` ids.
     """
     if not channel_ids:
         return {}
+    now = ref or P.now()
     out = {}
     ids = list(channel_ids)
     for i in range(0, len(ids), 400):
@@ -148,9 +155,18 @@ def _channel_baselines(conn, channel_ids, n=M.DEFAULT_BASELINE_N):
         for r in conn.execute(q, chunk).fetchall():
             per_channel[r["channel_id"]].append(r)
         for ch, vids in per_channel.items():
+            uploads = sorted((ts, v["view_count"] or 0, v["video_id"]) for v in vids
+                             if not M.is_short(v["duration_seconds"])
+                             and (ts := P.parse_iso(v["published_at"])))
             history = []
             for v in vids:
-                out[v["video_id"]] = M.baseline_median(history, n)
+                entry = {"rolling": M.baseline_median(history, n),
+                         "period": None, "periodScope": None}
+                ts = P.parse_iso(v["published_at"])
+                if ts and (want is None or v["video_id"] in want):
+                    entry["period"], entry["periodScope"] = M.baseline_period(
+                        ts, uploads, now, exclude=v["video_id"])
+                out[v["video_id"]] = entry
                 if not M.is_short(v["duration_seconds"]):
                     history.append(v["view_count"] or 0)
     return out
@@ -177,18 +193,29 @@ def _history_map(conn, video_ids):
     return out
 
 
-def _enrich(conn, rows, ref=None):
-    baselines = _channel_baselines(conn, {r["channel_id"] for r in rows})
+def _enrich(conn, rows, ref=None, outlier_base="rolling"):
+    baselines = _channel_baselines(conn, {r["channel_id"] for r in rows}, ref=ref,
+                                   want={r["video_id"] for r in rows})
     history = _history_map(conn, [r["video_id"] for r in rows])
     for r in rows:
         views = r["view_count"] or 0
         age_h = P.hours_since(r["published_at"], ref)
         age_d = age_h / 24.0
-        base = baselines.get(r["video_id"])
+        b = baselines.get(r["video_id"]) or {}
+        rolling, period = b.get("rolling"), b.get("period")
+        # outlierScore, its band and the age-adjusted score follow the chosen
+        # base; both raw scores ship regardless, so callers can compare them
+        base = period if outlier_base == "period" else rolling
         r["ageHours"] = round(age_h, 1)
         r["ageDays"] = round(age_d, 2)
+        r["outlierBase"] = outlier_base
+        r["outlierScoreRolling"] = round(views / rolling, 3) if rolling else None
+        r["outlierScorePeriod"] = round(views / period, 3) if period else None
+        r["baselineRollingViews"] = int(rolling) if rolling else None
+        r["baselinePeriodViews"] = int(period) if period else None
+        r["baselinePeriodScope"] = b.get("periodScope")
         r["baselineMedianViews"] = int(base) if base else None
-        r["outlierScore"] = round(M.outlier_vs_median(views, [base] * 3), 3) if base else None
+        r["outlierScore"] = round(views / base, 3) if base else None
         r["outlierScoreAgeAdjusted"] = (
             round(M.age_adjusted_outlier(views, base, age_d), 3) if base else None)
         r["outlierBand"] = M.outlier_band(r["outlierScore"])
@@ -251,7 +278,8 @@ def viral_videos_small_channels(period="7d", period_by="published",
                                 niche=None, languages=None, region=None,
                                 category_id=None, max_channel_video_count=None,
                                 exclude_shorts=True, only_shorts=False,
-                                sort_by="viral", limit=25, preset=None) -> dict:
+                                sort_by="viral", limit=25, preset=None,
+                                outlier_base="rolling") -> dict:
     """Small channel + big video = the algorithm chose the content, not the brand.
 
     NexLev's version of this list is literally `views >= X AND subs <= Y` sorted
@@ -263,6 +291,7 @@ def viral_videos_small_channels(period="7d", period_by="published",
     `preset` -- see VIRAL_PRESETS. Raises ValueError for an unknown preset or
     for niche_all without a niche.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     preset = preset or "small_channels"
     if preset not in VIRAL_PRESETS:
         raise ValueError(f"unknown preset '{preset}', expected one of {VIRAL_PRESETS}")
@@ -276,7 +305,8 @@ def viral_videos_small_channels(period="7d", period_by="published",
     # cause is a default threshold, not an empty corpus.
     rows = load_window(period=period, period_by=period_by, niche=niche,
                        languages=languages, region=region, category_id=category_id,
-                       exclude_shorts=exclude_shorts, only_shorts=only_shorts)
+                       exclude_shorts=exclude_shorts, only_shorts=only_shorts,
+                       outlier_base=outlier_base)
     funnel = [("videos in window", len(rows), None)]
 
     if max_subscribers is not None:
@@ -306,6 +336,7 @@ def viral_videos_small_channels(period="7d", period_by="published",
         "period": period,
         "periodBy": period_by,
         "preset": preset,
+        "outlierBase": outlier_base,
         "filters": {
             "maxSubscribers": max_subscribers, "minViews": min_views,
             "minViewsPerSubscriber": min_views_per_subscriber,
@@ -370,7 +401,13 @@ def _video_out(r):
         "outlierScoreAgeAdjusted": r["outlierScoreAgeAdjusted"],
         "outlierBand": r["outlierBand"],
         "outlierScoreNexlev": r["outlierScoreNexlev"],
+        "outlierBase": r["outlierBase"],
+        "outlierScoreRolling": r["outlierScoreRolling"],
+        "outlierScorePeriod": r["outlierScorePeriod"],
         "baselineMedianViews": r["baselineMedianViews"],
+        "baselineRollingViews": r["baselineRollingViews"],
+        "baselinePeriodViews": r["baselinePeriodViews"],
+        "baselinePeriodScope": r["baselinePeriodScope"],
         "engagementRate": r["engagementRate"],
         "vphLifetime": r["vphLifetime"],
         "vph24h": r["vph24h"],
@@ -399,16 +436,17 @@ def _synthetic_share(group) -> dict:
 def most_popular_categories(period="7d", period_by="published", niche=None, region=None,
                             languages=None, max_subscribers=None, exclude_shorts=False,
                             compare_previous=True, rank_by="views",
-                            min_videos=3, limit=25) -> dict:
+                            min_videos=3, limit=25, outlier_base="rolling") -> dict:
     """Which categories own the attention in this window, and which are moving.
 
     Computed from our own corpus on purpose: since 21 July 2025 YouTube's
     chart=mostPopular only covers Music / Movies / Gaming, so it cannot answer
     "what is popular in Education right now" at all.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     common = dict(niche=niche, region=region, languages=languages,
                   max_subscribers=max_subscribers, exclude_shorts=exclude_shorts,
-                  period_by=period_by)
+                  period_by=period_by, outlier_base=outlier_base)
     rows = load_window(period=period, **common)
     prev = load_window(period=period, offset=1, **common) if compare_previous else []
 
@@ -475,6 +513,7 @@ def most_popular_categories(period="7d", period_by="published", niche=None, regi
         "period": period,
         "periodBy": period_by,
         "rankedBy": rank_by,
+        "outlierBase": outlier_base,
         "comparedTo": "previous equal-length window" if compare_previous else None,
         "videosAnalysed": len(rows),
         "previousWindowVideos": len(prev) if compare_previous else None,
@@ -516,16 +555,18 @@ def trending_keywords(period="7d", period_by="published", niche=None, region=Non
                       languages=None, category_id=None, max_subscribers=None,
                       exclude_shorts=False, source="both", ngram_max=3, min_videos=3,
                       top_n=30, sort_by="momentum", outlier_threshold=3.0,
-                      compare_previous=True) -> dict:
+                      compare_previous=True, outlier_base="rolling") -> dict:
     """Phrases rising in this window, each with a performance lift.
 
     source: "titles" | "tags" | "both". Tags are still returned by the API to
     non-owners, but most creators leave them empty -- low tag coverage in the
     output means creators didn't set tags, not that we failed to read them.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     common = dict(niche=niche, region=region, languages=languages,
                   category_id=category_id, max_subscribers=max_subscribers,
-                  exclude_shorts=exclude_shorts, period_by=period_by)
+                  exclude_shorts=exclude_shorts, period_by=period_by,
+                  outlier_base=outlier_base)
     rows = load_window(period=period, **common)
     prev = load_window(period=period, offset=1, **common) if compare_previous else []
 
@@ -559,6 +600,7 @@ def trending_keywords(period="7d", period_by="published", niche=None, region=Non
         "periodBy": period_by,
         "videosAnalysed": total,
         "previousWindowVideos": prev_total,
+        "outlierBase": outlier_base,
         "outlierBaseRate": round(base_rate * 100, 2),
         "tagCoveragePercent": round(tagged / total * 100, 1) if total else 0,
         "source": source,
@@ -579,7 +621,7 @@ def trending_keywords(period="7d", period_by="published", niche=None, region=Non
 
 def top_tags_by_category(period="7d", period_by="published", niche=None, region=None,
                          languages=None, exclude_shorts=False, min_videos=3, top_n=15,
-                         outlier_threshold=3.0) -> dict:
+                         outlier_threshold=3.0, outlier_base="rolling") -> dict:
     """Literal YouTube tags -- exactly as the creator set them, never split
     into words -- ranked per category by how many videos use them and how
     much that tag correlates with an outlier result.
@@ -589,8 +631,10 @@ def top_tags_by_category(period="7d", period_by="published", niche=None, region=
     actually use" -- one call, every category with a qualifying tag,
     ranked busiest-category-first.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = load_window(period=period, niche=niche, region=region, languages=languages,
-                       exclude_shorts=exclude_shorts, period_by=period_by)
+                       exclude_shorts=exclude_shorts, period_by=period_by,
+                       outlier_base=outlier_base)
     by_category = defaultdict(list)
     for r in rows:
         by_category[str(r["category_id"]) if r["category_id"] else "unknown"].append(r)
@@ -621,6 +665,7 @@ def top_tags_by_category(period="7d", period_by="published", niche=None, region=
     return {
         "period": period,
         "periodBy": period_by,
+        "outlierBase": outlier_base,
         "minVideos": min_videos,
         "topN": top_n,
         "quotaUsed": 0,

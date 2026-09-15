@@ -148,28 +148,31 @@ def cmd_viral(args):
         period=args.period, period_by=args.period_by,
         max_subscribers=args.max_subscribers, min_views=args.min_views,
         min_views_per_subscriber=args.min_vsr, niche=args.niche,
-        sort_by=args.sort_by, limit=args.limit, preset=args.preset))
+        sort_by=args.sort_by, limit=args.limit, preset=args.preset,
+        outlier_base=args.outlier_base))
 
 
 def cmd_categories(args):
     from application import discovery as trends
     out(trends.most_popular_categories(period=args.period, period_by=args.period_by,
                                        niche=args.niche, rank_by=args.rank_by,
-                                       limit=args.limit))
+                                       limit=args.limit, outlier_base=args.outlier_base))
 
 
 def cmd_keywords(args):
     from application import discovery as trends
     out(trends.trending_keywords(period=args.period, period_by=args.period_by,
                                  niche=args.niche, top_n=args.limit,
-                                 sort_by=args.sort_by, min_videos=args.min_videos))
+                                 sort_by=args.sort_by, min_videos=args.min_videos,
+                                 outlier_base=args.outlier_base))
 
 
 def cmd_channels(args):
     from application import channel_tracking as tracking
     out(tracking.recently_added_outlier_channels(
         period=args.period, period_by=args.period_by,
-        min_multiplier=args.min_multiplier, limit=args.limit))
+        min_multiplier=args.min_multiplier, limit=args.limit,
+        outlier_base=args.outlier_base))
 
 
 def cmd_stats(args):
@@ -234,6 +237,9 @@ def main():
                        choices=["published", "discovered", "updated"])
         p.add_argument("--niche")
         p.add_argument("--limit", type=int, default=25)
+        p.add_argument("--outlier-base", default="rolling", choices=["rolling", "period"],
+                       help="rolling: медиана 10 предыдущих роликов; "
+                            "period: медиана роликов канала ±15 дней вокруг публикации")
         return p
 
     p = period_args(sub.add_parser("viral", help="вирусные видео у маленьких каналов"))

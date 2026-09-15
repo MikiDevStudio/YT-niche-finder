@@ -84,6 +84,17 @@ def days_since(iso_ts: str, ref: datetime = None) -> float:
     return hours_since(iso_ts, ref) / 24.0
 
 
+def parse_iso(iso_ts: str) -> datetime | None:
+    """Stored ISO timestamp -> aware datetime (UTC if naive), None if unparseable."""
+    if not iso_ts:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
 def to_rfc3339(dt: datetime) -> str:
     """YouTube API wants 1970-01-01T00:00:00Z style."""
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

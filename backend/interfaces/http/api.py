@@ -35,6 +35,7 @@ from application import inspection as I
 from application import library as L
 from application import metadata_review as MR
 from application import alerts as AL
+from domain import metrics as M
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
 FRONTEND_DIR = Path(os.environ.get("FRONTEND_DIR")
@@ -121,6 +122,14 @@ def _need_key():
         )
 
 
+def _outlier_base(value):
+    """rolling | period -- a typo is the caller's mistake (400), not a crash (500)."""
+    try:
+        return M.check_outlier_base(value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.exception_handler(yt.QuotaExceeded)
 async def _quota_exceeded(request, exc):
     return JSONResponse(status_code=429, content={"error": "QuotaExceeded",
@@ -178,14 +187,16 @@ def viral(period: str = "7d", period_by: str = "published",
           min_outlier_score: float = None, niche: str = None,
           region: str = None, category_id: str = None,
           exclude_shorts: bool = True, only_shorts: bool = False,
-          sort_by: str = "viral", limit: int = 24, preset: str = None):
+          sort_by: str = "viral", limit: int = 24, preset: str = None,
+          outlier_base: str = "rolling"):
     try:
         return trends.viral_videos_small_channels(
             period=period, period_by=period_by, max_subscribers=max_subscribers,
             min_views=min_views, min_views_per_subscriber=min_views_per_subscriber,
             min_outlier_score=min_outlier_score, niche=niche, region=region,
             category_id=category_id, exclude_shorts=exclude_shorts,
-            only_shorts=only_shorts, sort_by=sort_by, limit=limit, preset=preset)
+            only_shorts=only_shorts, sort_by=sort_by, limit=limit, preset=preset,
+            outlier_base=outlier_base)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -193,46 +204,52 @@ def viral(period: str = "7d", period_by: str = "published",
 @app.get("/api/categories")
 def categories(period: str = "7d", period_by: str = "published", niche: str = None,
                region: str = None, rank_by: str = "views",
-               exclude_shorts: bool = False, min_videos: int = 1, limit: int = 25):
+               exclude_shorts: bool = False, min_videos: int = 1, limit: int = 25,
+               outlier_base: str = "rolling"):
     return trends.most_popular_categories(
         period=period, period_by=period_by, niche=niche, region=region,
         rank_by=rank_by, exclude_shorts=exclude_shorts, min_videos=min_videos,
-        limit=limit)
+        limit=limit, outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/keywords")
 def keywords(period: str = "24h", period_by: str = "published", niche: str = None,
              region: str = None, category_id: str = None, source: str = "both",
-             sort_by: str = "momentum", min_videos: int = 2, top_n: int = 30):
+             sort_by: str = "momentum", min_videos: int = 2, top_n: int = 30,
+             outlier_base: str = "rolling"):
     return trends.trending_keywords(
         period=period, period_by=period_by, niche=niche, region=region,
         category_id=category_id, source=source, sort_by=sort_by,
-        min_videos=min_videos, top_n=top_n)
+        min_videos=min_videos, top_n=top_n, outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/tags/top-by-category")
 def top_tags_by_category(period: str = "7d", period_by: str = "published", niche: str = None,
                          region: str = None, exclude_shorts: bool = False,
-                         min_videos: int = 3, top_n: int = 15):
+                         min_videos: int = 3, top_n: int = 15,
+                         outlier_base: str = "rolling"):
     return trends.top_tags_by_category(
         period=period, period_by=period_by, niche=niche, region=region,
-        exclude_shorts=exclude_shorts, min_videos=min_videos, top_n=top_n)
+        exclude_shorts=exclude_shorts, min_videos=min_videos, top_n=top_n,
+        outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/outlier-channels")
 def outlier_channels(period: str = "24h", period_by: str = "discovered",
                      min_multiplier: float = 2.0, max_subscribers: int = None,
                      min_subscribers: int = None,
-                     niche: str = None, limit: int = 25):
+                     niche: str = None, limit: int = 25, outlier_base: str = "rolling"):
     return T.recently_added_outlier_channels(
         period=period, period_by=period_by, min_multiplier=min_multiplier,
         max_subscribers=max_subscribers, min_subscribers=min_subscribers,
-        niche=niche, limit=limit)
+        niche=niche, limit=limit, outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/competition")
-def competition(period: str = "30d", niche: str = None, limit: int = 15):
-    return T.high_future_competition(period=period, niche=niche, limit=limit)
+def competition(period: str = "30d", niche: str = None, limit: int = 15,
+                outlier_base: str = "rolling"):
+    return T.high_future_competition(period=period, niche=niche, limit=limit,
+                                     outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/search")
@@ -241,41 +258,46 @@ def search(query: str = None, niche: str = None, period: str = "all",
            exclude_shorts: bool = False, only_shorts: bool = False,
            min_video_length: int = None, max_video_length: int = None,
            min_rpm: float = None, max_rpm: float = None,
-           sort_by: str = "outlier", limit: int = 30):
+           sort_by: str = "outlier", limit: int = 30, outlier_base: str = "rolling"):
     return {"results": Q.search_outliers(
         query=query or None, niche=niche, period=period,
         min_outlier_score=min_outlier_score, max_subscribers=max_subscribers,
         exclude_shorts=exclude_shorts, only_shorts=only_shorts,
         min_video_length=min_video_length, max_video_length=max_video_length,
         min_rpm=min_rpm, max_rpm=max_rpm,
-        sort_by=sort_by, limit=limit)}
+        sort_by=sort_by, limit=limit, outlier_base=_outlier_base(outlier_base))}
 
 
 @app.get("/api/overview")
-def overview(period: str = "24h", niche: str = None):
+def overview(period: str = "24h", niche: str = None, outlier_base: str = "rolling"):
     """Всё для главной одним запросом -- иначе страница делает шесть.
 
     Периоды разные намеренно: 24h для того, что действительно обновляется за
     сутки, и более широкие окна для срезов, которым нужна статистика.
     """
+    base = _outlier_base(outlier_base)
     wide = "30d" if period in ("1h", "6h", "24h", "48h") else period
     return {
         "period": period,
         "widePeriod": wide,
+        "outlierBase": base,
         "coverage": trends.coverage(period),
         "stats": Q.db_stats(),
         "outlierChannels": T.recently_added_outlier_channels(
             period=period, period_by="discovered", min_multiplier=1.5,
-            niche=niche, limit=6),
-        "competition": T.high_future_competition(period=wide, niche=niche, limit=6),
+            niche=niche, limit=6, outlier_base=base),
+        "competition": T.high_future_competition(period=wide, niche=niche, limit=6,
+                                                 outlier_base=base),
         "keywords": trends.trending_keywords(
-            period=period, niche=niche, min_videos=2, top_n=12, sort_by="trend"),
+            period=period, niche=niche, min_videos=2, top_n=12, sort_by="trend",
+            outlier_base=base),
         "categories": trends.most_popular_categories(
-            period=period, niche=niche, rank_by="channels", min_videos=1, limit=8),
+            period=period, niche=niche, rank_by="channels", min_videos=1, limit=8,
+            outlier_base=base),
         "viral": trends.viral_videos_small_channels(
             period=period, period_by="discovered", niche=niche,
             max_subscribers=100000, min_views=1000,
-            min_views_per_subscriber=0.5, limit=8),
+            min_views_per_subscriber=0.5, limit=8, outlier_base=base),
     }
 
 
@@ -287,8 +309,8 @@ def niches():
 
 
 @app.get("/api/niches/{slug}")
-def niche_detail(slug: str, period: str = "all"):
-    return Q.niche_overview(slug, period=period)
+def niche_detail(slug: str, period: str = "all", outlier_base: str = "rolling"):
+    return Q.niche_overview(slug, period=period, outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/channels/tracked")
@@ -297,8 +319,9 @@ def tracked():
 
 
 @app.get("/api/channels/{channel_id}")
-def channel(channel_id: str, period: str = "30d"):
-    res = T.channel_analytics(channel_id, period=period)
+def channel(channel_id: str, period: str = "30d", outlier_base: str = "rolling"):
+    res = T.channel_analytics(channel_id, period=period,
+                              outlier_base=_outlier_base(outlier_base))
     if not res.get("found"):
         raise HTTPException(status_code=404, detail=res.get("hint", "канал не найден"))
     return res
@@ -320,8 +343,10 @@ def similar_channels(channel_id: str, niche: str = None, limit: int = 10):
 
 
 @app.get("/api/channels/{channel_id}/niche-overview")
-def channel_niche_overview(channel_id: str, period: str = "all", limit: int = 15):
-    return Q.niche_overview_from_channel(channel_id, limit=limit, period=period)
+def channel_niche_overview(channel_id: str, period: str = "all", limit: int = 15,
+                           outlier_base: str = "rolling"):
+    return Q.niche_overview_from_channel(channel_id, limit=limit, period=period,
+                                         outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/videos/{video_id}/similar")
@@ -434,17 +459,20 @@ def title_changes(period: str = "7d", channel_id: str = None, limit: int = 50):
 
 @app.get("/api/best-time")
 def best_time(niche: str = None, channel_id: str = None, period: str = "90d",
-              min_samples: int = 2, timezone_offset_hours: int = 0):
+              min_samples: int = 2, timezone_offset_hours: int = 0,
+              outlier_base: str = "rolling"):
     return T.best_time_to_publish(niche=niche, channel_id=channel_id, period=period,
                                   min_samples=min_samples,
-                                  timezone_offset_hours=timezone_offset_hours)
+                                  timezone_offset_hours=timezone_offset_hours,
+                                  outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/title-patterns")
 def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d",
-                   min_videos: int = 3, top_n: int = 20):
+                   min_videos: int = 3, top_n: int = 20, outlier_base: str = "rolling"):
     return T.title_patterns(niche=niche, channel_id=channel_id, period=period,
-                            min_videos=min_videos, top_n=top_n)
+                            min_videos=min_videos, top_n=top_n,
+                            outlier_base=_outlier_base(outlier_base))
 
 
 # ------------------------------------------- операции, которые тратят квоту

@@ -71,6 +71,18 @@ def test_viral_unknown_preset_is_a_400():
     assert _viral(niche=NICHE, preset="everything").status_code == 400
 
 
+def test_outlier_base_is_passed_through_and_validated():
+    api._rate_hits.clear()
+    resp = client.get("/api/search", params={"niche": NICHE, "outlier_base": "period"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results and all(r["outlierBase"] == "period" for r in results)
+    assert {"outlierScoreRolling", "outlierScorePeriod"} <= set(results[0])
+
+    for path in ("/api/search", "/api/overview", f"/api/niches/{NICHE}"):
+        assert client.get(path, params={"outlier_base": "mean"}).status_code == 400, path
+
+
 if __name__ == "__main__":
     setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

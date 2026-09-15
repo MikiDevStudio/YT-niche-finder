@@ -195,7 +195,7 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
                                 max_channel_video_count: int = None,
                                 exclude_shorts: bool = True, only_shorts: bool = False,
                                 sort_by: str = "viral", limit: int = 25,
-                                preset: str = None) -> dict:
+                                preset: str = None, outlier_base: str = "rolling") -> dict:
     """Videos that went far beyond their channel's size, in a time window. FREE.
 
     period: 24h | 48h | 7d | 30d | 90d | all
@@ -210,6 +210,9 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
         "niche_all" -- every channel of `niche`, ignoring max_subscribers,
         min_views and min_views_per_subscriber, so big competitors are visible.
         niche_all requires `niche`.
+    outlier_base: "rolling" (default) or "period" -- which baseline
+        outlierScore, its band, sort and min_outlier_score follow; see
+        search_outliers. outlierScoreRolling and outlierScorePeriod always ship.
 
     Each result carries viewsPerSubscriber, an age-adjusted outlier score against
     the channel's own median, and -- once history exists -- vph24h and
@@ -224,7 +227,7 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
         region=region, category_id=category_id,
         max_channel_video_count=max_channel_video_count,
         exclude_shorts=exclude_shorts, only_shorts=only_shorts,
-        sort_by=sort_by, limit=limit, preset=preset)
+        sort_by=sort_by, limit=limit, preset=preset, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -235,7 +238,7 @@ def most_popular_categories(period: str = "7d", period_by: str = "published",
                             languages: list = None, max_subscribers: int = None,
                             exclude_shorts: bool = False, compare_previous: bool = True,
                             rank_by: str = "views", min_videos: int = 3,
-                            limit: int = 25) -> dict:
+                            limit: int = 25, outlier_base: str = "rolling") -> dict:
     """Category ranking for a window, with the shift versus the previous window. FREE.
 
     Returns per category: videos, channels, total and median views, share of all
@@ -245,6 +248,8 @@ def most_popular_categories(period: str = "7d", period_by: str = "published",
     rank_by: "views" (default, says where the attention is) or "channels"
         (how NexLev ranks these cards -- says where the crowding is).
     period_by: "published" or "discovered", same meaning as elsewhere.
+    outlier_base: "rolling" (default) or "period" -- baseline behind the
+        median outlier; see search_outliers.
 
     Computed from the local corpus deliberately -- YouTube's own mostPopular
     chart has covered only Music/Movies/Gaming since July 2025 and cannot rank
@@ -254,7 +259,7 @@ def most_popular_categories(period: str = "7d", period_by: str = "published",
         period=period, period_by=period_by, niche=niche, region=region,
         languages=languages, max_subscribers=max_subscribers,
         exclude_shorts=exclude_shorts, compare_previous=compare_previous,
-        rank_by=rank_by, min_videos=min_videos, limit=limit)
+        rank_by=rank_by, min_videos=min_videos, limit=limit, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -267,7 +272,8 @@ def trending_keywords(period: str = "24h", period_by: str = "published",
                       source: str = "both", ngram_max: int = 3, min_videos: int = 3,
                       top_n: int = 30, sort_by: str = "momentum",
                       outlier_threshold: float = 3.0,
-                      compare_previous: bool = True) -> dict:
+                      compare_previous: bool = True,
+                      outlier_base: str = "rolling") -> dict:
     """Phrases rising in a window, each with a breakout-correlation score. FREE.
 
     momentum     share now / share in the previous equal window (smoothed)
@@ -276,6 +282,8 @@ def trending_keywords(period: str = "24h", period_by: str = "published",
     trendScore   log(1+videos) * outlierLift * momentum
 
     source: titles | tags | both. sort_by: momentum | trend | lift | count | views.
+    outlier_base: "rolling" (default) or "period" -- baseline that decides
+    which videos count as outliers for outlierLift; see search_outliers.
     There is no such thing as YouTube search volume in the public API; anything
     advertising one is reselling Google Trends or scraping autocomplete.
     """
@@ -285,7 +293,8 @@ def trending_keywords(period: str = "24h", period_by: str = "published",
         category_id=category_id, max_subscribers=max_subscribers,
         exclude_shorts=exclude_shorts, source=source, ngram_max=ngram_max,
         min_videos=min_videos, top_n=top_n, sort_by=sort_by,
-        outlier_threshold=outlier_threshold, compare_previous=compare_previous)
+        outlier_threshold=outlier_threshold, compare_previous=compare_previous,
+        outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -294,7 +303,7 @@ def trending_keywords(period: str = "24h", period_by: str = "published",
 def top_tags_by_category(period: str = "7d", period_by: str = "published",
                          niche: str = None, region: str = None,
                          exclude_shorts: bool = False, min_videos: int = 3,
-                         top_n: int = 15) -> dict:
+                         top_n: int = 15, outlier_base: str = "rolling") -> dict:
     """Literal YouTube tags -- exactly as the creator set them -- ranked per
     category by frequency and breakout correlation. FREE.
 
@@ -303,11 +312,13 @@ def top_tags_by_category(period: str = "7d", period_by: str = "published",
     stays one unit. Answers "what tags do winning videos in category X
     actually use", not "what topics are trending". One category per response
     for every category with a tag used on >= min_videos videos, busiest
-    category first.
+    category first. outlier_base: "rolling" (default) or "period", see
+    search_outliers.
     """
     return trends.top_tags_by_category(
         period=period, period_by=period_by, niche=niche, region=region,
-        exclude_shorts=exclude_shorts, min_videos=min_videos, top_n=top_n)
+        exclude_shorts=exclude_shorts, min_videos=min_videos, top_n=top_n,
+        outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -320,19 +331,20 @@ def recently_added_outlier_channels(period: str = "24h",
                                     min_subscribers: int = None,
                                     niche: str = None, category_id: str = None,
                                     region: str = None, exclude_shorts: bool = True,
-                                    limit: int = 25) -> dict:
+                                    limit: int = 25, outlier_base: str = "rolling") -> dict:
     """Channels that entered the corpus recently AND are outperforming. FREE.
 
     The channel-level counterpart to viral_videos_small_channels: instead of a
     single breakout video it ranks whole channels by their best age-adjusted
     multiplier, with a 0-4 strength band (<2x, 2-3x, 3-5x, 5-10x, >10x).
     Defaults to period_by="discovered" because "recently added" is about when we
-    first saw the channel, not when it last uploaded."""
+    first saw the channel, not when it last uploaded.
+    outlier_base: "rolling" (default) or "period", see search_outliers."""
     return T.recently_added_outlier_channels(
         period=period, period_by=period_by, min_multiplier=min_multiplier,
         max_subscribers=max_subscribers, min_subscribers=min_subscribers,
         niche=niche, category_id=category_id, region=region,
-        exclude_shorts=exclude_shorts, limit=limit)
+        exclude_shorts=exclude_shorts, limit=limit, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -341,17 +353,19 @@ def recently_added_outlier_channels(period: str = "24h",
 def high_future_competition(period: str = "30d", period_by: str = "published",
                             niche: str = None, region: str = None,
                             category_id: str = None, min_videos: int = 2,
-                            limit: int = 25) -> dict:
+                            limit: int = 25, outlier_base: str = "rolling") -> dict:
     """Who is about to become your competition: young, fast-uploading channels
     whose recent videos already outperform, rolled up by category. FREE.
 
     competitionScore = medianMultiplier * log2(1 + uploads in window) * youth,
     where youth rewards channels under a year old -- an established channel
     doing well is a competitor you already have; a six-month-old one doing the
-    same is one you are about to get."""
+    same is one you are about to get.
+    outlier_base: "rolling" (default) or "period", see search_outliers."""
     return T.high_future_competition(
         period=period, period_by=period_by, niche=niche, region=region,
-        category_id=category_id, min_videos=min_videos, limit=limit)
+        category_id=category_id, min_videos=min_videos, limit=limit,
+        outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -364,13 +378,24 @@ def search_outliers(query: str = None, niche: str = None, languages: list = None
                     exclude_shorts: bool = False, only_shorts: bool = False,
                     min_video_length: int = None, max_video_length: int = None,
                     min_rpm: float = None, max_rpm: float = None,
-                    sort_by: str = "outlier", limit: int = 25) -> list:
+                    sort_by: str = "outlier", limit: int = 25,
+                    outlier_base: str = "rolling") -> list:
     """Search the local database for outlier videos. FREE, no quota, unlimited.
 
     Pass `query` for semantic ranking against local multilingual embeddings.
-    outlierScore here is against the channel's own rolling median (the
-    ViewStats/1of10 definition); outlierScoreNexlev is NexLev's lifetime-mean
-    version, kept so numbers stay comparable with their UI.
+    Two baselines, both always returned:
+      outlierScoreRolling -- views / median of the previous 10 long-form
+        uploads (the ViewStats/1of10 definition): "better than what the
+        channel did just before". Punishes a video that follows a hot streak.
+      outlierScorePeriod -- views / median of the channel's long-form uploads
+        within +-15 days of publication, skipping uploads younger than 14 days;
+        falls back to the channel median when the window has < 3
+        (baselinePeriodScope says which). "Better than the channel's level
+        back then."
+    outlier_base ("rolling" default | "period") picks the one outlierScore,
+    outlierBand, sort_by="outlier" and min_outlier_score follow.
+    outlierScoreNexlev is NexLev's lifetime-mean version, kept so numbers stay
+    comparable with their UI.
 
     min_rpm/max_rpm filter on estimatedRpm, a NexLev-style RPM estimate
     derived from the video's category via the same static niche-RPM table
@@ -384,17 +409,19 @@ def search_outliers(query: str = None, niche: str = None, languages: list = None
         min_outlier_score=min_outlier_score, period=period, region=region,
         category_id=category_id, exclude_shorts=exclude_shorts, only_shorts=only_shorts,
         min_video_length=min_video_length, max_video_length=max_video_length,
-        min_rpm=min_rpm, max_rpm=max_rpm, sort_by=sort_by, limit=limit)
+        min_rpm=min_rpm, max_rpm=max_rpm, sort_by=sort_by, limit=limit,
+        outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=True, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
-def niche_overview(niche: str, period: str = "all") -> dict:
+def niche_overview(niche: str, period: str = "all", outlier_base: str = "rolling") -> dict:
     """Saturation and opportunity read on a collected niche: channel-size
     distribution, median outlier, viral skew, Shorts share, top categories and
-    how many small channels are breaking out."""
-    return q.niche_overview(niche, period=period)
+    how many small channels are breaking out.
+    outlier_base: "rolling" (default) or "period", see search_outliers."""
+    return q.niche_overview(niche, period=period, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -437,7 +464,7 @@ def similar_videos(video_id: str, niche: str = None, limit: int = 10,
     idempotent_hint=True, open_world_hint=False))
 def niche_overview_from_channel(channel_id: str, limit: int = 15,
                                 min_videos_embedded: int = 1,
-                                period: str = "all") -> dict:
+                                period: str = "all", outlier_base: str = "rolling") -> dict:
     """NexLev-style get_niche_overview(channelId): the same saturation/
     opportunity read as niche_overview, but anchored on a channel instead of
     a pre-collected niche slug. Finds the channel's closest peers via
@@ -447,7 +474,7 @@ def niche_overview_from_channel(channel_id: str, limit: int = 15,
     """
     return q.niche_overview_from_channel(channel_id, limit=limit,
                                          min_videos_embedded=min_videos_embedded,
-                                         period=period)
+                                         period=period, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -517,24 +544,29 @@ def list_tracked_channels() -> list:
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=True, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
-def channel_analytics(channel_id: str, period: str = "30d") -> dict:
+def channel_analytics(channel_id: str, period: str = "30d",
+                      outlier_base: str = "rolling") -> dict:
     """Full analysis of one channel: profile, upload cadence, performance
     (median vs average views, viral skew), growth over 24h/7d/30d/90d, momentum
     and a Social-Blade-style grade, linear projections, two revenue models, and
-    its top outlier videos scored against its own rolling median.
+    its top outlier videos scored against its own median -- the previous 10
+    uploads (outlier_base="rolling", default) or the uploads around publication
+    ("period", see search_outliers).
 
     Growth fields are null until enough snapshots exist -- run refresh_channels /
     the worker for a few days first."""
-    return T.channel_analytics(channel_id, period=period)
+    return T.channel_analytics(channel_id, period=period, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=True, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
-def compare_channels(channel_ids: list, period: str = "30d") -> dict:
+def compare_channels(channel_ids: list, period: str = "30d",
+                     outlier_base: str = "rolling") -> dict:
     """Side-by-side comparison of several channels on the same metrics,
-    ranked by median views per subscriber (size-independent)."""
-    return T.compare_channels(channel_ids, period=period)
+    ranked by median views per subscriber (size-independent).
+    outlier_base: "rolling" (default) or "period" for bestOutlier, see search_outliers."""
+    return T.compare_channels(channel_ids, period=period, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -560,13 +592,16 @@ def title_changes(period: str = "7d", channel_id: str = None, limit: int = 50) -
     idempotent_hint=True, open_world_hint=False))
 def best_time_to_publish(niche: str = None, channel_id: str = None,
                          period: str = "90d", min_samples: int = 3,
-                         timezone_offset_hours: int = 0) -> dict:
+                         timezone_offset_hours: int = 0,
+                         outlier_base: str = "rolling") -> dict:
     """Score all 168 weekday/hour slots by the median age-adjusted outlier of
     videos published in them. Correlation, not causation -- but it is the same
-    idea TubeBuddy charges for, and it needs a few hundred collected videos."""
+    idea TubeBuddy charges for, and it needs a few hundred collected videos.
+    outlier_base: "rolling" (default) or "period", see search_outliers."""
     return T.best_time_to_publish(niche=niche, channel_id=channel_id, period=period,
                                   min_samples=min_samples,
-                                  timezone_offset_hours=timezone_offset_hours)
+                                  timezone_offset_hours=timezone_offset_hours,
+                                  outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -574,13 +609,15 @@ def best_time_to_publish(niche: str = None, channel_id: str = None,
     idempotent_hint=True, open_world_hint=False))
 def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d",
                    outlier_threshold: float = 3.0, min_videos: int = 4,
-                   top_n: int = 25) -> dict:
+                   top_n: int = 25, outlier_base: str = "rolling") -> dict:
     """Which title phrases correlate with breakouts in a niche or on a channel,
     ranked by lift over the base outlier rate. Gives you the niche's actual
-    title formulas instead of guesses."""
+    title formulas instead of guesses.
+    outlier_base: "rolling" (default) or "period", see search_outliers."""
     return T.title_patterns(niche=niche, channel_id=channel_id, period=period,
                             outlier_threshold=outlier_threshold,
-                            min_videos=min_videos, top_n=top_n)
+                            min_videos=min_videos, top_n=top_n,
+                            outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(

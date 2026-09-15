@@ -6,6 +6,8 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const state = {
   period: localStorage.getItem('nf.period') || '30d',
   niche: localStorage.getItem('nf.niche') || '',
+  /* rolling — медиана 10 предыдущих роликов, period — медиана роликов ±15 дней */
+  outlierBase: localStorage.getItem('nf.outlierBase') || 'rolling',
   route: 'overview',
 };
 
@@ -197,7 +199,9 @@ function videoCard(v) {
     <a class="thumb" href="https://www.youtube.com/watch?v=${esc(v.videoId)}" target="_blank" rel="noopener">
       ${thumb}
       ${vph != null ? `<span class="badge" data-tip="${esc(vphLabel)}: просмотров в час">${num(vph)} VPH</span>` : ''}
-      ${v.outlierScore != null ? `<span class="badge badge-right" data-tip="Множитель против медианы предыдущих загрузок канала">${mult(v.outlierScore)}</span>` : ''}
+      ${v.outlierScore != null ? `<span class="badge badge-right" data-tip="${v.outlierBase === 'period'
+        ? 'Множитель против медианы роликов канала ±15 дней вокруг публикации'
+        : 'Множитель против медианы предыдущих загрузок канала'}">${mult(v.outlierScore)}</span>` : ''}
     </a>
     <div class="vcard-title">${esc(v.title)}</div>
     <div class="vcard-meta">${compact(v.views)} просмотров · ${ago(v.publishedAt)}</div>

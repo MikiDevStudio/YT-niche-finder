@@ -270,10 +270,12 @@ function lineChart(points, { height = 180, valueLabel = 'значение' } = {
    так что компонент не знает, что такое «канал». big — выделенная точка,
    hollow — неполная (значение ещё растёт), label — прямая подпись; подписывать
    стоит единицы точек, остальное несут подсказка и таблица. Хит-зона 24px. */
-function scatterChart(points, { height = 320, log = true, valueLabel = 'значение' } = {}) {
+function scatterChart(points, { width = 720, height = 320, log = true, valueLabel = 'значение' } = {}) {
   const pts = (points || []).filter((p) => p.v > 0 && isFinite(new Date(p.t).getTime()));
   if (pts.length < 2) return empty('нужно минимум две точки');
-  const W = 720, H = height, m = { t: 14, r: 16, b: 24, l: 52 };
+  /* width — реальная ширина контейнера: тогда viewBox рисуется 1:1 и 11px
+     текста остаются 11px, а не раздуваются вместе с растянутым SVG. */
+  const W = Math.max(360, Math.round(width)), H = height, m = { t: 14, r: 16, b: 24, l: 52 };
   const f = log ? Math.log10 : (v) => v;
   const ts = pts.map((p) => new Date(p.t).getTime());
   const x0 = Math.min(...ts), x1 = Math.max(...ts);
@@ -290,14 +292,23 @@ function scatterChart(points, { height = 320, log = true, valueLabel = 'знач
     }
   } else { for (let i = 0; i <= 4; i++) yt.push((hi / 4) * i); }
 
-  /* Подписи X — начала месяцев, не больше ~8; на коротком окне — края. */
-  const long = x1 - x0 > 400 * 864e5;
-  const step = Math.max(1, Math.ceil((x1 - x0) / 864e5 / 30 / 8));
-  const xt = [];
-  const d = new Date(x0); d.setUTCDate(1); d.setUTCHours(0, 0, 0, 0); d.setUTCMonth(d.getUTCMonth() + 1);
-  for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + step)) xt.push(d.getTime());
-  const xLabel = (t) => new Date(t).toLocaleDateString('ru-RU',
-    xt.length ? (long ? { month: 'short', year: '2-digit' } : { month: 'short' }) : undefined);
+  /* Подписи X: до ~2.5 месяцев — дни (каждые 3 или 7), дальше — начала
+     месяцев, не больше ~8. Если в окно не попало ни одной — края. */
+  const span = x1 - x0, xt = [];
+  let fmt;
+  const d = new Date(x0); d.setUTCHours(0, 0, 0, 0);
+  if (span <= 75 * 864e5) {
+    const stepDays = span <= 21 * 864e5 ? 3 : 7;
+    d.setUTCDate(d.getUTCDate() + 1);
+    for (; d.getTime() <= x1; d.setUTCDate(d.getUTCDate() + stepDays)) xt.push(d.getTime());
+    fmt = { day: 'numeric', month: 'short' };
+  } else {
+    const step = Math.max(1, Math.ceil(span / 864e5 / 30 / 8));
+    d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+    for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + step)) xt.push(d.getTime());
+    fmt = span > 400 * 864e5 ? { month: 'short', year: '2-digit' } : { month: 'short' };
+  }
+  const xLabel = (t) => new Date(t).toLocaleDateString('ru-RU', xt.length ? fmt : undefined);
   const xTicks = xt.length ? xt : [x0, x1];
 
   const order = pts.map((p, i) => [p, ts[i]]).sort((a, b) => Number(!!a[0].big) - Number(!!b[0].big));
@@ -307,10 +318,24 @@ function scatterChart(points, { height = 320, log = true, valueLabel = 'знач
       <circle class="pt${p.big ? ' big' : ''}${p.hollow ? ' hollow' : ''}" cx="${cx}" cy="${cy}" r="${p.big ? 7 : 5}"/>
       <circle class="hit" cx="${cx}" cy="${cy}" r="12" data-tip="${esc(p.tip || `${num(p.v)} ${valueLabel}`)}"/></g>`;
   }).join('');
-  const labels = order.filter(([p]) => p.label).map(([p, t]) => {
-    const cx = px(t), right = cx > W - 180;
-    return `<text class="pt-label" x="${(right ? cx - 11 : cx + 11).toFixed(1)}" y="${(py(p.v) + 4).toFixed(1)}"
-      text-anchor="${right ? 'end' : 'start'}">${esc(p.label)}</text>`;
+  /* Подписи не складываются стопкой: по порядку labelRank каждая пробует встать
+     справа, потом слева от своей точки, и если места нет — не рисуется вовсе
+     (значение остаётся в подсказке и в таблице). Ширина — оценка по 11px. */
+  const labelled = order.filter(([p]) => p.label)
+    .sort((a, b) => (a[0].labelRank ?? 0) - (b[0].labelRank ?? 0));
+  const placed = labelled.map(([p, t]) => ({ x: px(t) - 8, y: py(p.v) - 8, w: 16, h: 16 }));
+  const overlaps = (r) => placed.some((o) =>
+    r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h);
+  const labels = labelled.map(([p, t]) => {
+    const cx = px(t), cy = py(p.v), w = p.label.length * 6.2 + 4;
+    for (const right of cx + 11 + w > W - m.r ? [false, true] : [true, false]) {
+      const r = { x: right ? cx + 11 : cx - 11 - w, y: cy - 9, w, h: 14 };
+      if (r.x < m.l || r.x + r.w > W - m.r || overlaps(r)) continue;
+      placed.push(r);
+      return `<text class="pt-label" x="${(right ? cx + 11 : cx - 11).toFixed(1)}" y="${(cy + 4).toFixed(1)}"
+        text-anchor="${right ? 'start' : 'end'}">${esc(p.label)}</text>`;
+    }
+    return '';
   }).join('');
 
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(valueLabel)} по дате, ${pts.length} точек">

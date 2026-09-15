@@ -806,7 +806,7 @@ function nicheScatter(d, opts) {
   const vids = d.videos.filter((v) => !opts.hidden.has(v.channelId) && !(opts.noShorts && v.isShort)
     && (cut == null || new Date(v.publishedAt).getTime() >= cut));
   const outliers = vids.filter((v) => v.isOutlier).sort((a, b) => b.outlierScore - a.outlierScore);
-  const top = new Set(outliers.slice(0, 5).map((v) => v.videoId));
+  const top = new Map(outliers.slice(0, 5).map((v, i) => [v.videoId, i]));
   const lead = commonLead(d.videos.map((v) => v.title));
   const shortTitle = (t) => {
     const s = (lead && t.startsWith(lead) ? t.slice(lead.length) : t).trim().replace(/^(a|an|the)\s+/i, '');
@@ -818,10 +818,11 @@ function nicheScatter(d, opts) {
     t: v.publishedAt, v: v.views, color: slot.get(v.channelId),
     big: v.isOutlier, hollow: v.isFresh,
     label: top.has(v.videoId) ? `${shortTitle(v.title || '')} ${mult(v.outlierScore)}` : null,
+    labelRank: top.get(v.videoId),
     tip: `<b>${num(v.views)}</b> просмотров · <b>${mult(v.outlierScore)}</b> ${base}<br>${esc(v.title)}<br>`
       + `${esc(name.get(v.channelId))} · ${new Date(v.publishedAt).toLocaleDateString('ru-RU')} · ${clock(v.lengthSeconds)}`
       + (v.isFresh ? `<br>${FRESH_LABEL}: просмотры ещё набираются` : ''),
-  })), { height: 340, valueLabel: 'просмотров' });
+  })), { width: view.clientWidth - 48, height: 360, valueLabel: 'просмотров' });
 
   const groups = new Map();
   for (const v of vids) {

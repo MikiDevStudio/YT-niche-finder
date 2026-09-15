@@ -614,6 +614,51 @@ def test_outlier_base_period_does_not_punish_a_video_after_a_hot_streak(monkeypa
     assert top["outlierScore"] == 4.0
 
 
+# --------------------------------------------------- точки для графика ниши
+
+def test_niche_videos_marks_outliers_fresh_and_filters(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    _no_network(monkeypatch)
+    cid = "UC" + "scatter".ljust(22, "0")
+    now = datetime.now(timezone.utc)
+    uploads = {  # id: (просмотры, дней назад, длительность)
+        "vsc_old1": (1000, 90, "PT10M"), "vsc_old2": (1000, 80, "PT10M"),
+        "vsc_old3": (1000, 70, "PT10M"), "vsc_hit": (9000, 60, "PT10M"),
+        "vsc_short": (300, 50, "PT45S"), "vsc_fresh": (500, 5, "PT10M"),
+    }
+
+    def video(vid):
+        views, days, duration = uploads[vid]
+        published = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        item = _api_video(vid, cid, views=views, published=published)
+        item["contentDetails"]["duration"] = duration
+        return item
+
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": v} for v in uploads], 1))
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [video(v) for v in ids])
+    srv.collect_channel(cid, niche="scatter-niche")
+
+    out = srv.niche_videos("scatter-niche")
+    assert out["found"] and out["videoCount"] == 6 and out["channelCount"] == 1
+    dates = [v["publishedAt"] for v in out["videos"]]
+    assert dates == sorted(dates), "точки идут по дате публикации"
+    by_id = {v["videoId"]: v for v in out["videos"]}
+    # 9000 против медианы трёх предыдущих по 1000 -- 9x
+    assert by_id["vsc_hit"]["isOutlier"] and by_id["vsc_hit"]["outlierScore"] == 9.0
+    assert out["outlierCount"] == 1 and out["channels"][0]["outliers"] == 1
+    assert by_id["vsc_fresh"]["isFresh"] and not by_id["vsc_hit"]["isFresh"]
+    assert by_id["vsc_short"]["isShort"]
+
+    no_shorts = srv.niche_videos("scatter-niche", exclude_shorts=True)
+    assert "vsc_short" not in {v["videoId"] for v in no_shorts["videos"]}
+    assert srv.niche_videos("scatter-niche", channel_ids=["UCnobody"])["videoCount"] == 0
+
+    missing = srv.niche_videos("no-such-niche")
+    assert missing["found"] is False and missing["hint"]
+
+
 def test_viral_niche_all_preset_requires_a_niche():
     for kwargs in ({"preset": "niche_all"}, {"preset": "no-such-preset", "niche": "x"}):
         try:

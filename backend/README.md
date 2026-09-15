@@ -281,6 +281,7 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | `trending_keywords` | growing phrases with momentum and outlier-lift |
 | `search_outliers` | outlier search over the database, semantically ranked by `query` |
 | `niche_overview` | niche density: channel-size distribution, viral skew, Shorts share |
+| `niche_videos` | every video of a niche as a point: exact date, views, length, channel, both outlier scores, `isOutlier` / `isFresh` — the data behind the dashboard's scatter |
 | `list_niches`, `db_stats` | what's been collected |
 | `data_coverage` | whether there's enough data for the requested window — call this first if a section comes back empty |
 

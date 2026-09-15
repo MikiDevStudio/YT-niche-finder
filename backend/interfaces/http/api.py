@@ -313,6 +313,18 @@ def niche_detail(slug: str, period: str = "all", outlier_base: str = "rolling"):
     return Q.niche_overview(slug, period=period, outlier_base=_outlier_base(outlier_base))
 
 
+@app.get("/api/niches/{slug}/videos")
+def niche_videos(slug: str, period: str = "all", channels: str = None,
+                 exclude_shorts: bool = False, outlier_base: str = "rolling",
+                 outlier_threshold: float = 2.0):
+    """Точки для графика ниши. channels -- id каналов через запятую."""
+    ids = [c.strip() for c in (channels or "").split(",") if c.strip()]
+    return Q.niche_videos(slug, period=period, channel_ids=ids or None,
+                          exclude_shorts=exclude_shorts,
+                          outlier_base=_outlier_base(outlier_base),
+                          outlier_threshold=outlier_threshold)
+
+
 @app.get("/api/channels/tracked")
 def tracked():
     return {"channels": T.list_tracked()}

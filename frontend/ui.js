@@ -265,6 +265,65 @@ function lineChart(points, { height = 180, valueLabel = 'значение' } = {
   </svg>`;
 }
 
+/* Точечный график: X — время, Y — значение, по умолчанию в лог-шкале.
+   Цвет точки задаёт вызывающий CSS-токеном (p.color, например '--cat-1'),
+   так что компонент не знает, что такое «канал». big — выделенная точка,
+   hollow — неполная (значение ещё растёт), label — прямая подпись; подписывать
+   стоит единицы точек, остальное несут подсказка и таблица. Хит-зона 24px. */
+function scatterChart(points, { height = 320, log = true, valueLabel = 'значение' } = {}) {
+  const pts = (points || []).filter((p) => p.v > 0 && isFinite(new Date(p.t).getTime()));
+  if (pts.length < 2) return empty('нужно минимум две точки');
+  const W = 720, H = height, m = { t: 14, r: 16, b: 24, l: 52 };
+  const f = log ? Math.log10 : (v) => v;
+  const ts = pts.map((p) => new Date(p.t).getTime());
+  const x0 = Math.min(...ts), x1 = Math.max(...ts);
+  const fv = pts.map((p) => f(p.v));
+  let lo = Math.min(...fv), hi = Math.max(...fv);
+  if (log) { lo = Math.floor(lo * 2) / 2; hi = Math.ceil(hi * 2) / 2; if (hi === lo) hi += 0.5; } else { lo = 0; hi = hi * 1.1 || 1; }
+  const px = (t) => m.l + ((t - x0) / (x1 - x0 || 1)) * (W - m.l - m.r);
+  const py = (v) => m.t + (1 - (f(v) - lo) / (hi - lo || 1)) * (H - m.t - m.b);
+
+  const yt = [];
+  if (log) {
+    for (let e = Math.floor(lo); e <= Math.ceil(hi); e++) {
+      for (const k of [1, 3]) { const v = k * 10 ** e; if (f(v) >= lo - 1e-9 && f(v) <= hi + 1e-9) yt.push(v); }
+    }
+  } else { for (let i = 0; i <= 4; i++) yt.push((hi / 4) * i); }
+
+  /* Подписи X — начала месяцев, не больше ~8; на коротком окне — края. */
+  const long = x1 - x0 > 400 * 864e5;
+  const step = Math.max(1, Math.ceil((x1 - x0) / 864e5 / 30 / 8));
+  const xt = [];
+  const d = new Date(x0); d.setUTCDate(1); d.setUTCHours(0, 0, 0, 0); d.setUTCMonth(d.getUTCMonth() + 1);
+  for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + step)) xt.push(d.getTime());
+  const xLabel = (t) => new Date(t).toLocaleDateString('ru-RU',
+    xt.length ? (long ? { month: 'short', year: '2-digit' } : { month: 'short' }) : undefined);
+  const xTicks = xt.length ? xt : [x0, x1];
+
+  const order = pts.map((p, i) => [p, ts[i]]).sort((a, b) => Number(!!a[0].big) - Number(!!b[0].big));
+  const dots = order.map(([p, t]) => {
+    const cx = px(t).toFixed(1), cy = py(p.v).toFixed(1);
+    return `<g class="ptg" style="--c:var(${p.color || '--series-1'})">
+      <circle class="pt${p.big ? ' big' : ''}${p.hollow ? ' hollow' : ''}" cx="${cx}" cy="${cy}" r="${p.big ? 7 : 5}"/>
+      <circle class="hit" cx="${cx}" cy="${cy}" r="12" data-tip="${esc(p.tip || `${num(p.v)} ${valueLabel}`)}"/></g>`;
+  }).join('');
+  const labels = order.filter(([p]) => p.label).map(([p, t]) => {
+    const cx = px(t), right = cx > W - 180;
+    return `<text class="pt-label" x="${(right ? cx - 11 : cx + 11).toFixed(1)}" y="${(py(p.v) + 4).toFixed(1)}"
+      text-anchor="${right ? 'end' : 'start'}">${esc(p.label)}</text>`;
+  }).join('');
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(valueLabel)} по дате, ${pts.length} точек">
+    ${yt.map((v) => `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${py(v).toFixed(1)}" y2="${py(v).toFixed(1)}"/>
+      <text x="${m.l - 8}" y="${(py(v) + 4).toFixed(1)}" text-anchor="end">${compact(v)}</text>`).join('')}
+    <line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>
+    ${xTicks.map((t, i) => `<text x="${px(t).toFixed(1)}" y="${H - 6}" text-anchor="${
+      xt.length ? 'middle' : i ? 'end' : 'start'}">${esc(xLabel(t))}</text>`).join('')}
+    ${dots}
+    ${labels}
+  </svg>`;
+}
+
 function funnelBlock(res) {
   if (!res.funnel) return '';
   const rows = res.funnel.map((f) =>
@@ -276,4 +335,4 @@ function funnelBlock(res) {
 
 export { $, api, q, num, compact, mult, ago, esc, delta, plural, pl, toast, tile, sectionHead,
          notice, empty, barList, strengthBar, channelRow, videoCard, table, commentList,
-         lineChart, funnelBlock, state };
+         lineChart, scatterChart, funnelBlock, state };

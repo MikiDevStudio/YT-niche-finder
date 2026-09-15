@@ -64,6 +64,12 @@ the results, instead of just an empty list. With a niche selected, «Канал�
 все каналы ниши» drops the subscriber, view and VSR filters and shows the
 niche's big competitors too.
 
+A niche page also plots every video of the niche by publication date against
+views (log scale): the three largest channels in colour, the rest grey,
+outliers as large dots with the top five labelled, videos under 30 days
+hollow. Channel and Shorts filters sit above the chart; the outliers are
+repeated as a table underneath.
+
 «База множителя» in the header switches every multiplier on the dashboard
 between the median of the channel's previous 10 uploads and the median of its
 uploads within ±15 days of publication.

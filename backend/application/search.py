@@ -201,6 +201,64 @@ def niche_overview_from_channel(channel_id: str, limit: int = 15,
     return overview
 
 
+def niche_videos(niche: str, period: str = "all", channel_ids: list = None,
+                 exclude_shorts: bool = False, outlier_base: str = "rolling",
+                 outlier_threshold: float = 2.0, fresh_days: float = 30.0) -> dict:
+    """Every video of a niche as a point: publication date, views, channel and
+    both outlier scores -- the data behind the dashboard's date x views scatter.
+
+    isOutlier compares the score picked by `outlier_base` with
+    `outlier_threshold`. isFresh marks videos younger than `fresh_days`: their
+    views are still coming in, so a low point there is not a flop yet.
+    """
+    outlier_base = M.check_outlier_base(outlier_base)
+    conn = db.get_conn()
+    row_niche = conn.execute("SELECT * FROM niches WHERE slug = ?", (niche,)).fetchone()
+    conn.close()
+    rows = trends.load_window(period=period, niche=niche, channel_ids=channel_ids or None,
+                              exclude_shorts=exclude_shorts, outlier_base=outlier_base)
+    rows.sort(key=lambda r: r["published_at"] or "")
+
+    channels, videos = {}, []
+    for r in rows:
+        score = r["outlierScore"]
+        outlier = score is not None and score >= outlier_threshold
+        ch = channels.setdefault(r["channel_id"], {
+            "channelId": r["channel_id"], "title": r["channel_title"],
+            "handle": r["channel_url"], "subscribers": r["subs"],
+            "videos": 0, "outliers": 0})
+        ch["videos"] += 1
+        ch["outliers"] += int(outlier)
+        videos.append({
+            "videoId": r["video_id"], "title": r["title"], "channelId": r["channel_id"],
+            "publishedAt": r["published_at"], "ageDays": r["ageDays"],
+            "views": r["view_count"], "lengthSeconds": r["duration_seconds"],
+            "isShort": r["isShort"],
+            "outlierScore": score,
+            "outlierScoreRolling": r["outlierScoreRolling"],
+            "outlierScorePeriod": r["outlierScorePeriod"],
+            "isOutlier": outlier,
+            "isFresh": r["ageDays"] < fresh_days,
+        })
+
+    hint = None
+    if not rows:
+        hint = (f"no videos in period '{period}' for this filter -- widen the period "
+                "or drop the channel filter" if row_niche else
+                "nothing collected under this slug yet -- collect_channel(niche=...) "
+                "or collect_niche")
+    return {
+        "niche": niche, "found": bool(row_niche or rows), "period": period,
+        "outlierBase": outlier_base, "outlierThreshold": outlier_threshold,
+        "freshDays": fresh_days,
+        "videoCount": len(videos), "channelCount": len(channels),
+        "outlierCount": sum(1 for v in videos if v["isOutlier"]),
+        "channels": sorted(channels.values(), key=lambda c: -c["videos"]),
+        "videos": videos,
+        "hint": hint,
+    }
+
+
 def list_niches() -> list:
     conn = db.get_conn()
     rows = conn.execute(

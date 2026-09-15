@@ -480,6 +480,26 @@ def niche_overview_from_channel(channel_id: str, limit: int = 15,
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=True, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
+def niche_videos(niche: str, period: str = "all", channel_ids: list = None,
+                 exclude_shorts: bool = False, outlier_base: str = "rolling",
+                 outlier_threshold: float = 2.0) -> dict:
+    """Every video of a collected niche as a point: exact publication date,
+    views, length, channel, outlierScoreRolling / outlierScorePeriod. FREE.
+
+    The raw series behind a date x views scatter -- use it to see clusters,
+    dry spells and saturation over time instead of a single median.
+    isOutlier: the score picked by outlier_base ("rolling" default | "period",
+    see search_outliers) >= outlier_threshold. isFresh: younger than 30 days,
+    views still coming in. channel_ids narrows to some channels; `channels`
+    gives per-channel video and outlier counts."""
+    return q.niche_videos(niche, period=period, channel_ids=channel_ids,
+                          exclude_shorts=exclude_shorts, outlier_base=outlier_base,
+                          outlier_threshold=outlier_threshold)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_niches() -> list:
     """Every niche collected so far (slug, query, last collected, video count)."""
     return q.list_niches()

@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   endpoints, `cli.py --outlier-base`, «База множителя» in the dashboard header)
   picks which one `outlierScore`, its band, sorting and `min_outlier_score`
   follow. Default stays `rolling`, so nothing changes unless asked.
+- **Niche scatter: publication date × views** — `niche_videos` (MCP) and
+  `GET /api/niches/{slug}/videos` return every video of a niche with its exact
+  date, views, length, channel, both outlier scores, `isOutlier` (against
+  `outlier_threshold`, default 2x) and `isFresh` (under 30 days). The niche page
+  draws them on a log scale: the three largest channels in colour, the rest as
+  «другие», outliers as large dots with the top five labelled, fresh videos
+  hollow; channel and Shorts filters above the chart, outliers as a table below.
 
 ### Fixed
 

@@ -15,6 +15,8 @@ destroys a mean baseline (observed avg/median ratios up to ~27x).
 """
 import math
 import statistics as st
+from bisect import bisect_left, bisect_right
+from datetime import timedelta
 
 # ------------------------------------------------------------------ outliers
 
@@ -51,6 +53,60 @@ def outlier_vs_median(video_views: int, prior_views, n: int = DEFAULT_BASELINE_N
     if not base or base <= 0:
         return None
     return video_views / base
+
+
+# Which baseline outlierScore follows. Both scores are always returned
+# (outlierScoreRolling / outlierScorePeriod); this only picks the headline one.
+#   rolling -- median of the previous DEFAULT_BASELINE_N long-form uploads:
+#              "better than what the channel did just before"
+#   period  -- median of the channel's uploads published around the same
+#              time: "better than the channel's level back then", which does
+#              not punish a video for following a hot streak
+OUTLIER_BASES = ("rolling", "period")
+PERIOD_WINDOW_DAYS = 15
+PERIOD_MATURE_DAYS = 14
+PERIOD_MIN_VIDEOS = 3
+
+
+def check_outlier_base(base) -> str:
+    base = base or "rolling"
+    if base not in OUTLIER_BASES:
+        raise ValueError(f"unknown outlier_base '{base}', expected one of {OUTLIER_BASES}")
+    return base
+
+
+def baseline_period(published, uploads, now, exclude=None,
+                    window_days: float = PERIOD_WINDOW_DAYS,
+                    mature_days: float = PERIOD_MATURE_DAYS,
+                    min_videos: int = PERIOD_MIN_VIDEOS):
+    """Median views of the channel's uploads published within +-window_days
+    of `published`.
+
+    uploads: [(published_at datetime, views, key)] sorted by date -- the
+    channel's long-form uploads. `exclude` is the key of the video being
+    scored. Uploads younger than `mature_days` at `now` are skipped: they have
+    not collected their views yet and would drag the base down for every
+    recent video.
+
+    Returns (median, "window"), or (median of all mature uploads, "channel")
+    when the window holds fewer than `min_videos`, or (None, None) when even
+    that is too thin.
+    """
+    mature_before = now - timedelta(days=mature_days)
+    span = timedelta(days=window_days)
+
+    def usable(u):
+        return u[2] != exclude and u[0] <= mature_before
+
+    lo = bisect_left(uploads, published - span, key=lambda u: u[0])
+    hi = bisect_right(uploads, published + span, key=lambda u: u[0])
+    vals = [u[1] for u in uploads[lo:hi] if usable(u)]
+    if len(vals) >= min_videos:
+        return float(st.median(vals)), "window"
+    vals = [u[1] for u in uploads if usable(u)]
+    if len(vals) >= min_videos:
+        return float(st.median(vals)), "channel"
+    return None, None
 
 
 OUTLIER_BANDS = [

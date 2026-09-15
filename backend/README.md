@@ -382,7 +382,11 @@ Full details are in `docs/research-tools.md` (internal notes, not included
 in this repository); the code is in `metrics.py`. In short:
 
 ```
-outlierScore        = views / median views of the previous 10 long-form uploads
+outlierScoreRolling = views / median views of the previous 10 long-form uploads
+outlierScorePeriod  = views / median views of the channel's long-form uploads within ±15 days
+                      of publication (uploads younger than 14 days skipped; fewer than 3 in the
+                      window -> the channel median, baselinePeriodScope="channel")
+outlierScore        = one of the two, picked by outlier_base="rolling" (default) | "period"
 outlierScoreAdjusted= views / (baseline * maturity(age in days))
 outlierScoreNexlev  = views / (channel.viewCount // channel.videoCount)   # to cross-check against NexLev
 viewsPerSubscriber  = views / subscribers
@@ -397,6 +401,15 @@ revenue             = monthly views / 1000 * niche RPM * 0.70
 Median instead of mean is deliberate: NexLev's baseline is the channel's
 lifetime mean, and a single viral video wrecks it (the observed
 mean-to-median ratio runs as high as 27x).
+
+The two medians answer different questions. Rolling asks "better than what
+the channel did just before?", so a video that follows a hot streak looks like
+a flop. Period asks "better than the channel's level at the time?". On a
+channel that peaked in July and dropped fivefold in August, a video from the
+middle of July scores 0.4x rolling and 0.8x period. Every section, search, niche
+and channel tool takes `outlier_base`, and `outlierScore`, `outlierBand`,
+`sort_by="outlier"` and `min_outlier_score` follow it; both raw scores are
+always in the response. Alerts and the Chrome extension stay on rolling.
 
 ---
 

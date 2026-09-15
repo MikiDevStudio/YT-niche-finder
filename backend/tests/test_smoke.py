@@ -72,6 +72,32 @@ def test_outlier_formulas():
     assert M.outlier_band(1.0) == "normal"
 
 
+def test_period_baseline():
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
+
+    def ago(days):
+        return now - timedelta(days=days)
+
+    uploads = sorted([(ago(60), 100, "a"), (ago(50), 200, "b"), (ago(45), 300, "c"),
+                      (ago(44), 900, "self"), (ago(40), 400, "e"), (ago(5), 10, "fresh")])
+    # +-15 days around day 44: b, c, e -- 'a' is 16 days out, the video itself is skipped
+    assert M.baseline_period(ago(44), uploads, now, exclude="self") == (300.0, "window")
+    # a 3-day-old video: its window holds only an immature neighbour, so the
+    # channel median over mature uploads stands in (100, 200, 300, 900, 400)
+    assert M.baseline_period(ago(3), uploads, now) == (300.0, "channel")
+    assert M.baseline_period(ago(44), uploads[:2], now) == (None, None)
+
+    assert M.check_outlier_base(None) == "rolling"
+    assert M.check_outlier_base("period") == "period"
+    try:
+        M.check_outlier_base("mean")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown outlier base should raise")
+
+
 def test_maturity_curve_is_monotonic():
     prev = 0
     for age in range(0, 31):
@@ -228,6 +254,25 @@ def test_query_layer():
     assert query.niche_overview("nope")["found"] is False
     s = query.db_stats()
     assert s["videos"] > 100 and s["video_stat_snapshots"] > 0
+
+
+def test_outlier_base_switch():
+    kw = dict(period="90d", max_subscribers=10**9, min_views=0,
+              min_views_per_subscriber=0, limit=1000)
+    rolling = trends.viral_videos_small_channels(**kw)
+    period = trends.viral_videos_small_channels(outlier_base="period", **kw)
+    assert rolling["outlierBase"] == "rolling" and period["outlierBase"] == "period"
+    assert all(r["outlierScore"] == r["outlierScoreRolling"] for r in rolling["results"])
+    assert all(r["outlierScore"] == r["outlierScorePeriod"] for r in period["results"])
+    assert any(r["outlierScorePeriod"] is not None for r in period["results"])
+    # both raw scores ship whichever base is selected
+    by_id = {r["videoId"]: r for r in rolling["results"]}
+    assert all(by_id[r["videoId"]]["outlierScorePeriod"] == r["outlierScorePeriod"]
+               for r in period["results"] if r["videoId"] in by_id)
+
+    a = T.channel_analytics("UC0000000000000000000b", outlier_base="period")
+    assert a["outlierBase"] == "period" and a["topOutliers"]
+    assert all(o["outlierScore"] == o["outlierScorePeriod"] for o in a["topOutliers"])
 
 
 def test_everything_json_serialisable():

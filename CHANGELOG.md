@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   without the `max_subscribers` / `min_views` / `min_views_per_subscriber`
   filters, so big competitors show up next to small ones. Requires a niche;
   the dashboard offers it as «Каналы: все каналы ниши» once a niche is picked.
+- **Second outlier baseline: `outlierScorePeriod`** — views against the median
+  of the channel's long-form uploads within ±15 days of publication (uploads
+  younger than 14 days skipped, channel median when the window has fewer than
+  3). Returned next to `outlierScoreRolling` in sections, search, niche and
+  channel analytics; `outlier_base="rolling"|"period"` (MCP tools, HTTP
+  endpoints, `cli.py --outlier-base`, «База множителя» in the dashboard header)
+  picks which one `outlierScore`, its band, sorting and `min_outlier_score`
+  follow. Default stays `rolling`, so nothing changes unless asked.
 
 ### Fixed
 

@@ -114,7 +114,9 @@ def _growth_block(history, now_row, field, days):
 
 
 def channel_analytics(channel_id: str, period: str = "30d",
-                      baseline_n: int = M.DEFAULT_BASELINE_N) -> dict:
+                      baseline_n: int = M.DEFAULT_BASELINE_N,
+                      outlier_base: str = "rolling") -> dict:
+    outlier_base = M.check_outlier_base(outlier_base)
     conn = db.get_conn()
     ch = conn.execute("SELECT * FROM channels WHERE channel_id = ?", (channel_id,)).fetchone()
     if not ch:
@@ -132,25 +134,38 @@ def channel_analytics(channel_id: str, period: str = "30d",
     shorts = [v for v in videos if M.is_short(v["duration_seconds"])]
     views_list = [v["view_count"] or 0 for v in longform] or [v["view_count"] or 0 for v in videos]
 
-    # ---- outliers, computed chronologically against a rolling median baseline
+    # ---- outliers, computed chronologically against the chosen baseline:
+    #      rolling median of the previous uploads, or the median around publication
     chron = sorted(longform, key=lambda v: v["published_at"] or "")
+    now = P.now()
+    uploads = sorted((ts, v["view_count"] or 0, v["video_id"]) for v in chron
+                     if (ts := P.parse_iso(v["published_at"])))
     hist_views, outliers = [], []
     for v in chron:
-        base = M.baseline_median(hist_views, baseline_n)
+        views = v["view_count"] or 0
+        rolling = M.baseline_median(hist_views, baseline_n)
+        hist_views.append(views)
+        ts = P.parse_iso(v["published_at"])
+        period_base, scope = (M.baseline_period(ts, uploads, now, exclude=v["video_id"])
+                              if ts else (None, None))
+        base = period_base if outlier_base == "period" else rolling
+        if not base:
+            continue
         age = P.days_since(v["published_at"])
-        if base:
-            score = (v["view_count"] or 0) / base
-            outliers.append({
-                "videoId": v["video_id"], "title": v["title"],
-                "publishedAt": v["published_at"], "views": v["view_count"],
-                "ageDays": round(age, 1),
-                "outlierScore": round(score, 2),
-                "outlierScoreAgeAdjusted": round(
-                    M.age_adjusted_outlier(v["view_count"] or 0, base, age) or 0, 2),
-                "band": M.outlier_band(score),
-                "baselineMedianViews": int(base),
-            })
-        hist_views.append(v["view_count"] or 0)
+        score = views / base
+        outliers.append({
+            "videoId": v["video_id"], "title": v["title"],
+            "publishedAt": v["published_at"], "views": v["view_count"],
+            "ageDays": round(age, 1),
+            "outlierScore": round(score, 2),
+            "outlierScoreRolling": round(views / rolling, 2) if rolling else None,
+            "outlierScorePeriod": round(views / period_base, 2) if period_base else None,
+            "outlierScoreAgeAdjusted": round(
+                M.age_adjusted_outlier(views, base, age) or 0, 2),
+            "band": M.outlier_band(score),
+            "baselineMedianViews": int(base),
+            "baselinePeriodScope": scope,
+        })
     outliers.sort(key=lambda x: x["outlierScore"], reverse=True)
 
     # ---- growth from our own snapshots
@@ -236,6 +251,7 @@ def channel_analytics(channel_id: str, period: str = "30d",
             "warning": "AdSense only, ignores sponsorships; public estimates are "
                        "routinely off by 200-400%",
         },
+        "outlierBase": outlier_base,
         "topOutliers": outliers[:10],
         "caveats": [
             "subscriberCount is rounded to 3 significant figures by the API -- "
@@ -246,10 +262,12 @@ def channel_analytics(channel_id: str, period: str = "30d",
     }
 
 
-def compare_channels(channel_ids: list, period: str = "30d") -> dict:
+def compare_channels(channel_ids: list, period: str = "30d",
+                     outlier_base: str = "rolling") -> dict:
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = []
     for cid in channel_ids:
-        a = channel_analytics(cid, period=period)
+        a = channel_analytics(cid, period=period, outlier_base=outlier_base)
         if not a.get("found"):
             rows.append({"channelId": cid, "found": False})
             continue
@@ -273,7 +291,7 @@ def compare_channels(channel_ids: list, period: str = "30d") -> dict:
         })
     ranked = [r for r in rows if r.get("found") is not False]
     ranked.sort(key=lambda r: r.get("medianViewsPerSubscriber") or 0, reverse=True)
-    return {"period": period, "channels": rows,
+    return {"period": period, "outlierBase": outlier_base, "channels": rows,
             "rankedByViewsPerSubscriber": [r["channelId"] for r in ranked]}
 
 
@@ -351,7 +369,8 @@ WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def best_time_to_publish(niche: str = None, channel_id: str = None, period: str = "90d",
-                         min_samples: int = 3, timezone_offset_hours: int = 0) -> dict:
+                         min_samples: int = 3, timezone_offset_hours: int = 0,
+                         outlier_base: str = "rolling") -> dict:
     """TubeBuddy's "score every hour of the week", rebuilt from outlier scores.
 
     We score each of the 168 weekday/hour buckets by the MEDIAN age-adjusted
@@ -359,8 +378,10 @@ def best_time_to_publish(niche: str = None, channel_id: str = None, period: str 
     that happens to contain one huge channel wins every time.
     """
     from application import discovery as trends
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = trends.load_window(period=period, niche=niche,
-                              channel_ids=[channel_id] if channel_id else None)
+                              channel_ids=[channel_id] if channel_id else None,
+                              outlier_base=outlier_base)
     buckets = defaultdict(list)
     for r in rows:
         ts = _dt(r["published_at"])
@@ -386,6 +407,7 @@ def best_time_to_publish(niche: str = None, channel_id: str = None, period: str 
     ]
     return {
         "period": period, "niche": niche, "channelId": channel_id,
+        "outlierBase": outlier_base,
         "videosAnalysed": len(rows), "bucketsScored": len(scored),
         "timezoneOffsetHours": timezone_offset_hours,
         "best": heatmap[:10], "worst": heatmap[-5:], "heatmap": heatmap,
@@ -396,11 +418,13 @@ def best_time_to_publish(niche: str = None, channel_id: str = None, period: str 
 
 def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d",
                    outlier_threshold: float = 3.0, min_videos: int = 4,
-                   top_n: int = 25) -> dict:
+                   top_n: int = 25, outlier_base: str = "rolling") -> dict:
     """Which title phrases actually correlate with breakouts in this niche."""
     from application import discovery as trends
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = trends.load_window(period=period, niche=niche,
-                              channel_ids=[channel_id] if channel_id else None)
+                              channel_ids=[channel_id] if channel_id else None,
+                              outlier_base=outlier_base)
     shaped = [{"video_id": r["video_id"], "title": r["title"], "tags": r["tags"],
                "views": r["view_count"] or 0,
                "outlier": r["outlierScoreAgeAdjusted"] or r["outlierScore"]
@@ -410,6 +434,7 @@ def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d
     ranked = K.score(stats, total, base, min_videos=min_videos, top_n=top_n, sort_by="lift")
     return {
         "period": period, "niche": niche, "channelId": channel_id,
+        "outlierBase": outlier_base,
         "videosAnalysed": total,
         "outlierBaseRatePercent": round(base * 100, 2),
         "patterns": [{k: p[k] for k in ("keyword", "videos", "outlierLift",
@@ -531,7 +556,8 @@ def recently_added_outlier_channels(period: str = "24h", period_by: str = "disco
                                     max_subscribers: int = None,
                                     min_subscribers: int = None, niche: str = None,
                                     category_id: str = None, region: str = None,
-                                    exclude_shorts: bool = True, limit: int = 25) -> dict:
+                                    exclude_shorts: bool = True, limit: int = 25,
+                                    outlier_base: str = "rolling") -> dict:
     """Channels that showed up in the corpus recently AND are outperforming.
 
     The channel-level counterpart to viral_videos_small_channels. Defaults to
@@ -540,11 +566,13 @@ def recently_added_outlier_channels(period: str = "24h", period_by: str = "disco
     "Last 24 Hours" list is full of year-old videos.
     """
     from application import discovery as trends
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = trends.load_window(period=period, period_by=period_by, niche=niche,
                               category_id=category_id, region=region,
                               max_subscribers=max_subscribers,
                               min_subscribers=min_subscribers,
-                              exclude_shorts=exclude_shorts)
+                              exclude_shorts=exclude_shorts,
+                              outlier_base=outlier_base)
     channels = _channel_rows_from_videos(rows)
     for ch in channels:
         ch.pop("_rows", None)
@@ -563,7 +591,7 @@ def recently_added_outlier_channels(period: str = "24h", period_by: str = "disco
                 f"каналу нужно минимум 4 видео в базе.")
     return {
         "period": period, "periodBy": period_by,
-        "minMultiplier": min_multiplier, "hint": hint,
+        "minMultiplier": min_multiplier, "hint": hint, "outlierBase": outlier_base,
         "channelsMatched": len(channels), "quotaUsed": 0,
         "legend": {"multiplier": "best age-adjusted outlier among the channel's "
                                  "videos in this window",
@@ -575,7 +603,7 @@ def recently_added_outlier_channels(period: str = "24h", period_by: str = "disco
 def high_future_competition(period: str = "30d", period_by: str = "published",
                             niche: str = None, region: str = None,
                             category_id: str = None, min_videos: int = 2,
-                            limit: int = 25) -> dict:
+                            limit: int = 25, outlier_base: str = "rolling") -> dict:
     """Who is about to become your competition: young, fast-uploading channels
     whose recent videos already outperform.
 
@@ -591,9 +619,10 @@ def high_future_competition(period: str = "30d", period_by: str = "published",
     doing the same is one you are about to get.
     """
     from application import discovery as trends
+    outlier_base = M.check_outlier_base(outlier_base)
     rows = trends.load_window(period=period, period_by=period_by, niche=niche,
                               region=region, category_id=category_id,
-                              exclude_shorts=True)
+                              exclude_shorts=True, outlier_base=outlier_base)
     channels = _channel_rows_from_videos(rows)
 
     conn = db.get_conn()
@@ -638,6 +667,7 @@ def high_future_competition(period: str = "30d", period_by: str = "published",
 
     return {
         "period": period, "periodBy": period_by, "quotaUsed": 0,
+        "outlierBase": outlier_base,
         "channelsAnalysed": len(scored),
         "note": "approximation of NexLev's niche-level list, computed per channel "
                 "from the local corpus and rolled up by category",

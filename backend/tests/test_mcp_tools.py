@@ -575,6 +575,45 @@ def test_viral_niche_all_preset_shows_big_channels_of_the_niche(monkeypatch):
     assert [r["videoId"] for r in full["results"]] == ["vbigcomp1"]
 
 
+# --------------------------------------------------- база аутлаера
+
+def test_outlier_base_period_does_not_punish_a_video_after_a_hot_streak(monkeypatch):
+    """Как Mr. Finance: жаркий июль, холодный август. Ролик в холодном месяце
+    против 10 предыдущих выглядит провалом, против своего периода -- хитом."""
+    from datetime import datetime, timedelta, timezone
+    _no_network(monkeypatch)
+    cid = "UC" + "hotstreak".ljust(22, "0")
+    now = datetime.now(timezone.utc)
+    uploads = {f"vhot{i}": (60000, 80 - 2 * i) for i in range(5)}      # дни 80..72
+    uploads.update({f"vcold{i}": (5000, d) for i, d in enumerate((50, 48, 46, 36, 32))})
+    uploads["vtarget"] = (20000, 40)
+
+    def video(vid):
+        views, days = uploads[vid]
+        published = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _api_video(vid, cid, views=views, published=published)
+
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": v} for v in uploads], 1))
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [video(v) for v in ids])
+    srv.collect_channel(cid, niche="hot-streak")
+
+    found = srv.search_outliers(niche="hot-streak", min_outlier_score=0,
+                                outlier_base="period", limit=50)
+    target = next(r for r in found if r["videoId"] == "vtarget")
+    # 10 предыдущих: пять по 60K и три по 5K -> медиана 60K
+    assert abs(target["outlierScoreRolling"] - 20000 / 60000) < 0.01
+    # +-15 дней вокруг 40-го дня: пять холодных по 5K
+    assert target["outlierScorePeriod"] == 4.0
+    assert target["outlierScore"] == 4.0 and target["outlierBase"] == "period"
+    assert target["baselinePeriodScope"] == "window"
+
+    a = srv.channel_analytics(cid, outlier_base="period")
+    top = next(o for o in a["topOutliers"] if o["videoId"] == "vtarget")
+    assert top["outlierScore"] == 4.0
+
+
 def test_viral_niche_all_preset_requires_a_niche():
     for kwargs in ({"preset": "niche_all"}, {"preset": "no-such-preset", "niche": "x"}):
         try:

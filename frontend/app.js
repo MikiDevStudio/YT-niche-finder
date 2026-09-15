@@ -19,7 +19,7 @@ const SATURATION = {
   'mixed field': 'смешанное поле',
 };
 
-function base() { return { period: state.period, niche: state.niche }; }
+function base() { return { period: state.period, niche: state.niche, outlier_base: state.outlierBase }; }
 
 async function guard(fn) {
   view.innerHTML = '<div class="skeleton-page"></div>';
@@ -760,7 +760,7 @@ function nicheOverviewBlock(d, head) {
 }
 
 async function viewNiche(slug) {
-  const d = await api(`/api/niches/${encodeURIComponent(slug)}${q({ period: state.period })}`);
+  const d = await api(`/api/niches/${encodeURIComponent(slug)}${q({ period: state.period, outlier_base: state.outlierBase })}`);
   if (!d.found) { view.innerHTML = notice(esc(d.hint || 'ниша не найдена')); return; }
   view.innerHTML = nicheOverviewBlock(d,
     sectionHead(`Ниша: ${slug}`, `${esc(d.query || '')} · ${plabel(state.period)}`));
@@ -770,11 +770,11 @@ async function viewNiche(slug) {
 
 async function viewChannel(id) {
   const [a, vel, hist, sim, nicheOv] = await Promise.all([
-    api(`/api/channels/${encodeURIComponent(id)}${q({ period: state.period })}`),
+    api(`/api/channels/${encodeURIComponent(id)}${q({ period: state.period, outlier_base: state.outlierBase })}`),
     api(`/api/channels/${encodeURIComponent(id)}/velocity${q({ period: state.period })}`),
     api(`/api/channels/${encodeURIComponent(id)}/history`),
     api(`/api/channels/${encodeURIComponent(id)}/similar`),
-    api(`/api/channels/${encodeURIComponent(id)}/niche-overview`),
+    api(`/api/channels/${encodeURIComponent(id)}/niche-overview${q({ outlier_base: state.outlierBase })}`),
   ]);
   view.innerHTML = `
     <div class="card">
@@ -833,7 +833,9 @@ async function viewChannel(id) {
     </div>
 
     <div class="card">
-      ${sectionHead('Топ outlier-видео', 'против медианы предыдущих загрузок этого канала')}
+      ${sectionHead('Топ outlier-видео', a.outlierBase === 'period'
+        ? 'против медианы роликов канала ±15 дней вокруг публикации'
+        : 'против медианы предыдущих загрузок этого канала')}
       ${table([
         { label: 'Видео', wrap: true, render: (r) => `<a href="https://www.youtube.com/watch?v=${esc(r.videoId)}" target="_blank" rel="noopener">${esc(r.title)}</a>` },
         { label: 'Просмотры', num: true, render: (r) => compact(r.views) },
@@ -1335,6 +1337,11 @@ function initChrome() {
   });
   $('#globalNiche').addEventListener('change', (e) => {
     state.niche = e.target.value; localStorage.setItem('nf.niche', state.niche); render();
+  });
+  const baseSel = $('#globalBase');
+  baseSel.value = state.outlierBase;
+  baseSel.addEventListener('change', () => {
+    state.outlierBase = baseSel.value; localStorage.setItem('nf.outlierBase', state.outlierBase); render();
   });
   $('#reloadBtn').addEventListener('click', () => { loadFootStat(); loadNiches(); render(); });
 

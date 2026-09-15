@@ -22,11 +22,13 @@ def search_outliers(query: str = None, niche: str = None, languages: list = None
                     exclude_shorts: bool = False, only_shorts: bool = False,
                     min_video_length: int = None, max_video_length: int = None,
                     min_rpm: float = None, max_rpm: float = None,
-                    sort_by: str = "outlier", limit: int = 25) -> list:
+                    sort_by: str = "outlier", limit: int = 25,
+                    outlier_base: str = "rolling") -> list:
     rows = trends.load_window(
         period=period, niche=niche, languages=languages, region=region,
         category_id=category_id, max_subscribers=max_subscribers,
         exclude_shorts=exclude_shorts, only_shorts=only_shorts,
+        outlier_base=outlier_base,
     )
     if min_upload_date:
         rows = [r for r in rows if (r["published_at"] or "") >= min_upload_date]
@@ -143,11 +145,12 @@ def _overview_from_rows(rows: list) -> dict:
     }
 
 
-def niche_overview(niche: str, period: str = "all") -> dict:
+def niche_overview(niche: str, period: str = "all", outlier_base: str = "rolling") -> dict:
+    outlier_base = M.check_outlier_base(outlier_base)
     conn = db.get_conn()
     row_niche = conn.execute("SELECT * FROM niches WHERE slug = ?", (niche,)).fetchone()
     conn.close()
-    rows = trends.load_window(period=period, niche=niche)
+    rows = trends.load_window(period=period, niche=niche, outlier_base=outlier_base)
     if not rows:
         return {"niche": niche, "found": False,
                 "hint": "nothing collected under this slug yet -- run collect_niche"}
@@ -157,6 +160,7 @@ def niche_overview(niche: str, period: str = "all") -> dict:
         "niche": niche,
         "found": True,
         "period": period,
+        "outlierBase": outlier_base,
         "query": row_niche["query"] if row_niche else None,
         "last_collected_at": row_niche["last_collected_at"] if row_niche else None,
     })
@@ -165,20 +169,22 @@ def niche_overview(niche: str, period: str = "all") -> dict:
 
 def niche_overview_from_channel(channel_id: str, limit: int = 15,
                                 min_videos_embedded: int = 1,
-                                period: str = "all") -> dict:
+                                period: str = "all", outlier_base: str = "rolling") -> dict:
     """Channel-anchored niche read, NexLev's get_niche_overview(channelId)
     workflow: find this channel's closest peers via similar_channels
     (embedding centroid, FREE/local) and run the same saturation/opportunity
     analysis niche_overview does over the channel + its peers -- no
     pre-collected niche slug required.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     sim = similar_channels(channel_id, limit=limit, min_videos_embedded=min_videos_embedded)
     if not sim["similar"]:
         return {"channel_id": channel_id, "found": False,
                 "hint": sim.get("hint", "no similar channels found in the local corpus yet")}
 
     channel_ids = [channel_id] + [s["channelId"] for s in sim["similar"]]
-    rows = trends.load_window(period=period, channel_ids=channel_ids)
+    rows = trends.load_window(period=period, channel_ids=channel_ids,
+                              outlier_base=outlier_base)
     if not rows:
         return {"channel_id": channel_id, "found": False,
                 "hint": "similar channels found, but no videos in the requested period"}
@@ -188,6 +194,7 @@ def niche_overview_from_channel(channel_id: str, limit: int = 15,
         "channel_id": channel_id,
         "found": True,
         "period": period,
+        "outlierBase": outlier_base,
         "peer_channel_count": len(sim["similar"]),
         "peers": sim["similar"],
     })

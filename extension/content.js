@@ -160,9 +160,15 @@
     const similarList = (similar?.similar || []).slice(0, 5);
     const score = m.outlierScore;
     const lvl = bandLevel(m.outlierBand);
-    const baseText = m.baselineMedianViews
-      ? `медиана последних ${m.baselineSample} роликов канала: ${compact(m.baselineMedianViews)}`
-      : (c.avgViews ? `среднее по каналу за всё время: ${compact(c.avgViews)}` : 'базы сравнения нет');
+    const meanText = c.avgViews ? `среднее по каналу за всё время: ${compact(c.avgViews)}` : 'базы сравнения нет';
+    const baseText = m.outlierBase === 'period'
+      ? (m.baselinePeriodViews
+        ? `медиана роликов канала ${m.baselinePeriodScope === 'channel'
+          ? 'за всё время (рядом с датой мало роликов)' : '±15 дней вокруг публикации'}: ${compact(m.baselinePeriodViews)}`
+        : meanText)
+      : (m.baselineMedianViews
+        ? `медиана последних ${m.baselineSample} роликов канала: ${compact(m.baselineMedianViews)}`
+        : meanText);
 
     const vph = m.vph24h != null ? m.vph24h : m.vphLifetime;
     const vphLabel = m.vph24h != null ? 'просмотров/час (24ч)' : 'просмотров/час (за всё время)';

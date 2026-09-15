@@ -39,6 +39,7 @@ API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
 RSS_INTERVAL_MIN = int(os.environ.get("WORKER_RSS_INTERVAL_MIN", "30"))
 ALERTS_INTERVAL_MIN = int(os.environ.get("WORKER_ALERTS_INTERVAL_MIN", "60"))
+ALERTS_OUTLIER_BASE = os.environ.get("WORKER_ALERTS_OUTLIER_BASE", "rolling")
 HOT_INTERVAL_MIN = int(os.environ.get("WORKER_HOT_INTERVAL_MIN", "180"))
 DAILY_INTERVAL_MIN = int(os.environ.get("WORKER_DAILY_INTERVAL_MIN", "1440"))
 HOT_PERIOD = os.environ.get("WORKER_HOT_PERIOD", "7d")
@@ -127,7 +128,7 @@ def cycle():
         _mark("hot")
 
     if _due("alerts", ALERTS_INTERVAL_MIN):
-        _safe("alerts scan", lambda: alerts_mod.scan())
+        _safe("alerts scan", lambda: alerts_mod.scan(outlier_base=ALERTS_OUTLIER_BASE))
         _mark("alerts")
 
     if _due("daily", DAILY_INTERVAL_MIN):

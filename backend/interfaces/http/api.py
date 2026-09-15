@@ -295,7 +295,7 @@ def overview(period: str = "24h", niche: str = None, outlier_base: str = "rollin
             period=period, niche=niche, rank_by="channels", min_videos=1, limit=8,
             outlier_base=base),
         "viral": trends.viral_videos_small_channels(
-            period=period, period_by="discovered", niche=niche,
+            period=period, period_by="published", niche=niche,
             max_subscribers=100000, min_views=1000,
             min_views_per_subscriber=0.5, limit=8, outlier_base=base),
     }
@@ -407,6 +407,7 @@ def metadata_review(payload: dict = Body(...)):
         channel_id=payload.get("channelId") or payload.get("channel_id"),
         is_short=bool(payload.get("isShort") or payload.get("is_short") or False),
         period=payload.get("period") or "180d",
+        outlier_base=_outlier_base(payload.get("outlier_base")),
     )
 
 
@@ -458,10 +459,10 @@ def mark_events_seen(payload: dict = Body(default={})):
 
 
 @app.post("/api/events/scan")
-def scan_events():
+def scan_events(outlier_base: str = "rolling"):
     """Manual trigger -- the worker already runs this on WORKER_ALERTS_INTERVAL_MIN,
     this is for "check right now" from the dashboard/popup without waiting."""
-    return AL.scan()
+    return AL.scan(outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/title-changes")
@@ -557,8 +558,10 @@ def untrack(channel_id: str):
 # при промахе добираем 1-2 units и сохраняем — см. application/inspection.py.
 
 @app.get("/api/inspect/video")
-def inspect_video(video_id: str, refresh: bool = False, fetch: bool = True):
-    return I.inspect_video(API_KEY, video_id, refresh=refresh, fetch=fetch)
+def inspect_video(video_id: str, refresh: bool = False, fetch: bool = True,
+                  outlier_base: str = "rolling"):
+    return I.inspect_video(API_KEY, video_id, refresh=refresh, fetch=fetch,
+                           outlier_base=_outlier_base(outlier_base))
 
 
 @app.get("/api/inspect/channel")
@@ -571,7 +574,8 @@ def inspect_videos(payload: dict = Body(...)):
     ids = payload.get("ids") or []
     if not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="ids должен быть списком")
-    return I.inspect_videos(API_KEY, ids, fetch=bool(payload.get("fetch", True)))
+    return I.inspect_videos(API_KEY, ids, fetch=bool(payload.get("fetch", True)),
+                            outlier_base=_outlier_base(payload.get("outlier_base")))
 
 
 # ---------------------------------------------------------------- статика

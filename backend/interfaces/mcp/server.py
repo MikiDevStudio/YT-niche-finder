@@ -688,7 +688,7 @@ def delete_saved_item(item_id: int) -> dict:
     idempotent_hint=True, open_world_hint=False))
 def review_metadata(title: str, description: str = "", tags: list = None,
                     niche: str = None, channel_id: str = None, is_short: bool = False,
-                    period: str = "180d") -> dict:
+                    period: str = "180d", outlier_base: str = "rolling") -> dict:
     """Check a draft title/description/tags against your own corpus for this
     niche and/or channel -- signals only (length, structure, tag overlap,
     near-duplicate topics), each with its own sample size, never a single
@@ -696,11 +696,13 @@ def review_metadata(title: str, description: str = "", tags: list = None,
     every signal comes back marked unreliable by design. Wording suggestions
     are not generated here -- once you see which signals are off, ask me
     (the model) to propose actual title text based on what this returned;
-    that's the point of exposing facts instead of a canned rewrite."""
+    that's the point of exposing facts instead of a canned rewrite.
+    outlier_base: "rolling" (default) or "period" -- which baseline decides
+    what counts as an outlier in the comparison pool, see search_outliers."""
     from application import metadata_review as mr
     return mr.review_metadata(title, description=description, tags=tags or [],
                               niche=niche, channel_id=channel_id, is_short=is_short,
-                              period=period)
+                              period=period, outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -755,14 +757,16 @@ def draft_outcomes(min_age_days: float = 7.0) -> list:
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=False, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
-def scan_for_alerts() -> dict:
+def scan_for_alerts(outlier_base: str = "rolling") -> dict:
     """Run the alert scan right now instead of waiting for the worker's own
     schedule: new outlier (x>=3) on a tracked channel, a video accelerating
     (x>=2), a title changed, or a channel posting again after a silent
     stretch. Zero quota -- reads only what's already collected. Idempotent:
-    re-running never creates duplicate events for the same occurrence."""
+    re-running never creates duplicate events for the same occurrence.
+    outlier_base: "rolling" (default) or "period", see search_outliers; the
+    worker uses WORKER_ALERTS_OUTLIER_BASE."""
     from application import alerts as alerts_mod
-    return alerts_mod.scan()
+    return alerts_mod.scan(outlier_base=outlier_base)
 
 
 @mcp.tool(annotations=ToolAnnotations(

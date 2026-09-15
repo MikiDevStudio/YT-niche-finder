@@ -27,6 +27,14 @@
     <span>Показывать значок только у выбросов (от ×1,5)</span>
   </label>
 
+  <label class="field">
+    <span>База множителя</span>
+    <select id="outlierBase">
+      <option value="rolling">медиана 10 прошлых роликов канала</option>
+      <option value="period">медиана роликов канала ±15 дней</option>
+    </select>
+  </label>
+
   <label class="check">
     <input id="showVph" type="checkbox">
     <span>Второй значок — просмотров в час

@@ -410,7 +410,9 @@ channel that peaked in July and dropped fivefold in August, a video from the
 middle of July scores 0.4x rolling and 0.8x period. Every section, search, niche
 and channel tool takes `outlier_base`, and `outlierScore`, `outlierBand`,
 `sort_by="outlier"` and `min_outlier_score` follow it; both raw scores are
-always in the response. Alerts and the Chrome extension stay on rolling.
+always in the response. Alerts (`WORKER_ALERTS_OUTLIER_BASE` for the worker),
+metadata review and the Chrome extension (its popup setting) take the same
+choice; on search-result badges "rolling" stays the cheap channel mean.
 
 ---
 

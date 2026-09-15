@@ -215,8 +215,9 @@ async function viewOverview() {
   view.innerHTML = `
     ${thin ? notice(`За окно ${plabel(state.period)} в базе всего
       <b>${cov.videosPublishedInPeriod}</b> видео из ${num(cov.videosTotal)}.
-      Секции ниже считаются по окну «когда мы впервые увидели», поэтому что-то показывают,
-      но для честной картины нужно собрать больше каналов — это дёшево, ≈1 unit на 50 видео.`) : ''}
+      Outlier-каналы ниже считаются по окну «когда мы впервые увидели», поэтому что-то показывают,
+      а вирусные видео — только то, что вышло в этом окне. Для честной картины нужно собрать
+      больше каналов — это дёшево, ≈1 unit на 50 видео.`) : ''}
 
     <div class="tiles">
       ${tile('Каналов', num(d.stats.channels))}
@@ -286,7 +287,7 @@ async function viewOverview() {
     </section>
 
     <section class="card">
-      ${sectionHead('Вирусные видео у маленьких каналов', `${plabel(state.period)} · по попаданию в базу`,
+      ${sectionHead('Вирусные видео у маленьких каналов', `${plabel(state.period)} · по дате публикации`,
         '<a class="btn btn-ghost btn-sm" href="#/viral">Все</a>')}
       ${d.viral.results.length
         ? `<div class="cards">${d.viral.results.map(videoCard).join('')}</div>`
@@ -297,7 +298,9 @@ async function viewOverview() {
 /* -------------------------------------------------------- Вирусные видео */
 
 async function viewViral() {
-  const p = { period_by: 'discovered', max_subscribers: 100000, min_views: 1000,
+  /* «За 30 дней» читается как «вышло за 30 дней»: окно по попаданию в базу
+     выдавало ролики многолетней давности, собранные на этой неделе. */
+  const p = { period_by: 'published', max_subscribers: 100000, min_views: 1000,
               min_views_per_subscriber: 0.5, sort_by: 'viral', limit: 48, preset: 'small_channels' };
   Object.assign(p, JSON.parse(localStorage.getItem('nf.viral') || '{}'), base());
   /* «Все каналы ниши» имеет смысл только при выбранной нише: без неё это был бы
@@ -689,7 +692,8 @@ async function viewMetadata() {
     const body = mdReadForm();
     if (!body.title) return toast('Введите заголовок', 'err');
     try {
-      renderMdResult(await api('/api/metadata/review', { method: 'POST', body }));
+      renderMdResult(await api('/api/metadata/review',
+        { method: 'POST', body: { ...body, outlier_base: state.outlierBase } }));
     } catch (e) { toast(e.message, 'err'); }
   });
 

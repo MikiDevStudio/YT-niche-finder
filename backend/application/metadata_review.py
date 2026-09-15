@@ -13,6 +13,7 @@ import infrastructure.postgres as db
 from application import discovery as trends
 from domain import metadata as MD
 from domain import keywords as K
+from domain import metrics as M
 from domain import periods as P
 
 OUTLIER_THRESHOLD_DEFAULT = 3.0
@@ -77,16 +78,20 @@ def _near_duplicates(title, description, niche=None, channel_id=None,
 def review_metadata(title: str, description: str = "", tags=None, niche: str = None,
                     channel_id: str = None, is_short: bool = False,
                     period: str = "180d",
-                    outlier_threshold: float = OUTLIER_THRESHOLD_DEFAULT) -> dict:
+                    outlier_threshold: float = OUTLIER_THRESHOLD_DEFAULT,
+                    outlier_base: str = "rolling") -> dict:
     """The main entry point: everything a draft's title/description/tags can
-    be checked against using only what's already in the local database."""
+    be checked against using only what's already in the local database.
+    outlier_base picks the baseline that decides which comparison videos
+    count as outliers (see M.OUTLIER_BASES)."""
+    outlier_base = M.check_outlier_base(outlier_base)
     tags = tags or []
     if not niche and not channel_id:
         return {
             "signals": [], "structuralPatterns": [], "keyPhrase": None,
             "nearDuplicates": {"checked": 0, "near": []},
             "sample": {"videosAnalysed": 0, "outliersInSample": 0, "period": period,
-                      "niche": niche, "channelId": channel_id},
+                      "niche": niche, "channelId": channel_id, "outlierBase": outlier_base},
             "summary": {"ok": 0, "warn": 0, "unreliable": 0, "total": 0},
             "hint": "pass niche and/or channel_id -- without a comparison pool every "
                     "signal would be unreliable by definition",
@@ -94,7 +99,8 @@ def review_metadata(title: str, description: str = "", tags=None, niche: str = N
 
     rows = trends.load_window(period=period, niche=niche,
                               channel_ids=[channel_id] if channel_id else None,
-                              exclude_shorts=not is_short, only_shorts=is_short)
+                              exclude_shorts=not is_short, only_shorts=is_short,
+                              outlier_base=outlier_base)
     for r in rows:
         r["outlier"] = _outlier_score(r)
     outlier_rows = [r for r in rows if r["outlier"] >= outlier_threshold]
@@ -127,7 +133,8 @@ def review_metadata(title: str, description: str = "", tags=None, niche: str = N
 
     trending_phrases = []
     if niche:
-        tkw = trends.trending_keywords(period=period, niche=niche, top_n=15)
+        tkw = trends.trending_keywords(period=period, niche=niche, top_n=15,
+                                       outlier_base=outlier_base)
         trending_phrases = [k["keyword"] for k in tkw.get("keywords", [])]
     signals.append(MD.tag_overlap(tags, trending_phrases))
 
@@ -139,7 +146,8 @@ def review_metadata(title: str, description: str = "", tags=None, niche: str = N
         "keyPhrase": key_phrase,
         "nearDuplicates": near_dup,
         "sample": {"videosAnalysed": len(rows), "outliersInSample": len(outlier_rows),
-                  "period": period, "niche": niche, "channelId": channel_id},
+                  "period": period, "niche": niche, "channelId": channel_id,
+                  "outlierBase": outlier_base},
         "summary": MD.summarize(signals),
     }
 

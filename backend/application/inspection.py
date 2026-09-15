@@ -111,6 +111,17 @@ def _prior_views(conn, channel_id, published_at, is_short, n=M.DEFAULT_BASELINE_
     return [(r["view_count"] or 0) for r in rows][::-1]
 
 
+def _uploads(conn, channel_id, is_short):
+    """Все загрузки канала того же формата как [(дата, просмотры, id)] по дате —
+    вход для базы периода (M.baseline_period)."""
+    rows = conn.execute(
+        "SELECT video_id, published_at, view_count FROM videos "
+        "WHERE channel_id = ? AND COALESCE(is_short, 0) = ?",
+        (channel_id, 1 if is_short else 0)).fetchall()
+    return sorted((t, r["view_count"] or 0, r["video_id"]) for r in rows
+                  if (t := _dt(r["published_at"])))
+
+
 def _history(conn, video_id, limit=300):
     rows = conn.execute(
         "SELECT captured_at, view_count FROM video_stats_history WHERE video_id = ? "
@@ -162,7 +173,9 @@ def _ensure_channel(conn, api_key, channel_id, fetch=True, refresh=False,
 # ------------------------------------------------------------------- видео
 
 def inspect_video(api_key: str, video_id: str, refresh: bool = False,
-                  fetch: bool = True, stale_hours: float = VIDEO_STALE_HOURS) -> dict:
+                  fetch: bool = True, stale_hours: float = VIDEO_STALE_HOURS,
+                  outlier_base: str = "rolling") -> dict:
+    outlier_base = M.check_outlier_base(outlier_base)
     conn = db.get_conn()
     try:
         quota = 0
@@ -207,10 +220,19 @@ def inspect_video(api_key: str, video_id: str, refresh: bool = False,
         prior = _prior_views(conn, channel_id, published, short)
         baseline_median = M.baseline_median(prior)
         score_median = M.outlier_vs_median(views, prior)
-        primary = score_median if score_median is not None else score_mean
+        # база периода: медиана роликов того же формата ±15 дней вокруг публикации
+        pub_dt = _dt(published)
+        period_base, period_scope = (
+            M.baseline_period(pub_dt, _uploads(conn, channel_id, short),
+                              datetime.now(timezone.utc), exclude=video_id)
+            if channel_id and pub_dt else (None, None))
+        score_period = views / period_base if period_base else None
+        chosen_base = period_base if outlier_base == "period" else baseline_median
+        chosen = score_period if outlier_base == "period" else score_median
+        primary = chosen if chosen is not None else score_mean
         age_adjusted = None
-        if baseline_median and age_days is not None:
-            age_adjusted = M.age_adjusted_outlier(views, baseline_median, age_days)
+        if chosen_base and age_days is not None:
+            age_adjusted = M.age_adjusted_outlier(views, chosen_base, age_days)
         elif avg_views and age_days is not None:
             age_adjusted = M.age_adjusted_outlier(views, avg_views, age_days)
 
@@ -267,11 +289,15 @@ def inspect_video(api_key: str, video_id: str, refresh: bool = False,
             "metrics": {
                 "outlierScore": _round(primary),
                 "outlierBand": M.outlier_band(primary),
+                "outlierBase": outlier_base,
                 "outlierVsMedian": _round(score_median),
+                "outlierVsPeriod": _round(score_period),
                 "outlierVsChannelMean": _round(score_mean),
                 "outlierAgeAdjusted": _round(age_adjusted),
                 "baselineMedianViews": int(baseline_median) if baseline_median else None,
                 "baselineSample": len(prior),
+                "baselinePeriodViews": int(period_base) if period_base else None,
+                "baselinePeriodScope": period_scope,
                 "viewsPerSubscriber": _round(
                     M.views_per_subscriber(views, ch.get("subscriber_count")), 3)
                 if ch.get("subscriber_count") else None,
@@ -418,13 +444,15 @@ def inspect_channel(api_key: str, ref: str, refresh: bool = False, fetch: bool =
 # ------------------------------------------- пачка видео (бейджи в выдаче)
 
 def inspect_videos(api_key: str, video_ids, fetch: bool = True,
-                   stale_hours: float = BATCH_STALE_HOURS) -> dict:
+                   stale_hours: float = BATCH_STALE_HOURS,
+                   outlier_base: str = "rolling") -> dict:
     """Короткая сводка по списку id — для значков на карточках видео.
 
     Стоимость: 1 unit на каждые 50 неизвестных роликов плюс 1 unit на каждые
     50 неизвестных каналов. Поэтому значки на странице поиска обходятся в
     2-3 units, а не в сотню.
     """
+    outlier_base = M.check_outlier_base(outlier_base)
     ids = [i.strip() for i in (video_ids or []) if i and i.strip()][:MAX_BATCH_IDS]
     if not ids:
         return {"results": {}, "quotaUnits": 0}
@@ -471,6 +499,7 @@ def inspect_videos(api_key: str, video_ids, fetch: bool = True,
                         channels[item["id"]] = row
 
         history = _history_map(conn, [v.get("video_id") for v in found.values()])
+        uploads, now = {}, datetime.now(timezone.utc)
         results = {}
         for vid in ids:
             v = found.get(vid)
@@ -480,8 +509,19 @@ def inspect_videos(api_key: str, video_ids, fetch: bool = True,
             ch = channels.get(v.get("channel_id"), {})
             views = v.get("view_count") or 0
             age_days = P.days_since(v["published_at"]) if v.get("published_at") else None
+            # значки: по умолчанию дешёвое среднее канала (как у NexLev); с базой
+            # периода — медиана роликов канала ±15 дней, один запрос на канал
+            basis = "channel-mean"
             score = M.outlier_score(views, ch.get("view_count") or 0,
                                     ch.get("video_count") or 0) or None
+            pub_dt = _dt(v.get("published_at"))
+            if outlier_base == "period" and pub_dt and v.get("channel_id"):
+                key = (v["channel_id"], bool(v.get("is_short")))
+                if key not in uploads:
+                    uploads[key] = _uploads(conn, *key)
+                base, _ = M.baseline_period(pub_dt, uploads[key], now, exclude=vid)
+                if base:
+                    score, basis = views / base, "period"
             subs = ch.get("subscriber_count")
             vph_life = M.vph_lifetime(views, (age_days or 0) * 24) if age_days else None
             vph24 = M.vph_from_history(history.get(vid) or [], 24.0)
@@ -492,6 +532,7 @@ def inspect_videos(api_key: str, video_ids, fetch: bool = True,
                 "isShort": bool(v.get("is_short")),
                 "outlierScore": _round(score),
                 "outlierBand": M.outlier_band(score),
+                "outlierBasis": basis,
                 "viewsPerSubscriber": _round(M.views_per_subscriber(views, subs), 2) if subs else None,
                 "vphLifetime": _round(vph_life, 1),
                 # null until the worker has taken >=2 snapshots for this video --

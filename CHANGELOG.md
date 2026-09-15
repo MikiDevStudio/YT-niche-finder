@@ -82,9 +82,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   draws them on a log scale: the three largest channels in colour, the rest as
   «другие», outliers as large dots with the top five labelled, fresh videos
   hollow; channel and Shorts filters above the chart, outliers as a table below.
+- **`outlier_base` in alerts, metadata review and the Chrome extension** —
+  `scan_for_alerts` / `POST /api/events/scan?outlier_base=` and the worker's
+  `WORKER_ALERTS_OUTLIER_BASE`; `review_metadata` / `POST /api/metadata/review`;
+  `/api/inspect/video` and `/api/inspect/videos` (`outlierVsPeriod`,
+  `outlierBasis`), with «База множителя» in the extension popup driving the
+  video panel, the search badges, the channel panel and alert scans.
 
 ### Fixed
 
+- **Viral videos «за 30 дней» no longer list years-old uploads.** The overview
+  and the viral screen windowed by when a video entered the database, so a
+  2021 video collected this week showed up as "viral in the last 30 days".
+  Both now window by publication date; the viral screen still offers «по
+  попаданию в базу» explicitly.
+- **Test runners fail the process on a failed test.** `test_mcp_tools.py`,
+  `test_http_rate_limit.py` and `test_http_api.py` printed FAIL but exited 0,
+  so CI stayed green with broken tests.
 - **`collect_channel(..., niche=X)` now creates the niche row.** It used to
   write only `video_niches`, so `list_niches` and the dashboard's niche picker
   never showed a niche built from channels. The niche is slugified like

@@ -15,6 +15,7 @@ const DEFAULTS = {
   showBadges: true,     // значки на карточках видео в выдаче
   onlyOutliers: false,  // показывать значок только при score >= 1.5
   showVph: true,        // второй значок — просмотров/час под превью
+  outlierBase: 'rolling', // база множителя: rolling (10 прошлых роликов) | period (±15 дней)
   timeoutMs: 12000,
 };
 
@@ -84,7 +85,7 @@ async function inspectVideo(videoId, refresh) {
     if (hit) return hit;
   }
   const s = await getSettings();
-  const q = new URLSearchParams({ video_id: videoId, fetch: String(s.autoFetch) });
+  const q = new URLSearchParams({ video_id: videoId, fetch: String(s.autoFetch), outlier_base: s.outlierBase });
   if (refresh) q.set('refresh', 'true');
   const data = await api('/api/inspect/video?' + q);
   cacheSet(key, data);
@@ -113,12 +114,13 @@ async function channelDeep(channelId) {
   const hit = cacheGet(key, TTL.deep);
   if (hit) return hit;
   const tzOffset = -new Date().getTimezoneOffset() / 60;
+  const { outlierBase } = await getSettings();
   const soft = (p) => api(p).catch(() => null);
   const [analytics, similar, bestTime, patterns] = await Promise.all([
-    soft(`/api/channels/${channelId}?period=30d`),
+    soft(`/api/channels/${channelId}?period=30d&outlier_base=${outlierBase}`),
     soft(`/api/channels/${channelId}/similar?limit=6`),
-    soft(`/api/best-time?channel_id=${channelId}&period=180d&timezone_offset_hours=${tzOffset}`),
-    soft(`/api/title-patterns?channel_id=${channelId}&period=180d&top_n=8`),
+    soft(`/api/best-time?channel_id=${channelId}&period=180d&timezone_offset_hours=${tzOffset}&outlier_base=${outlierBase}`),
+    soft(`/api/title-patterns?channel_id=${channelId}&period=180d&top_n=8&outlier_base=${outlierBase}`),
   ]);
   const data = { analytics, similar, bestTime, patterns };
   cacheSet(key, data);
@@ -160,7 +162,7 @@ async function inspectBatch(ids) {
     const s = await getSettings();
     const data = await api('/api/inspect/videos', {
       method: 'POST',
-      body: { ids: need, fetch: s.autoFetch },
+      body: { ids: need, fetch: s.autoFetch, outlier_base: s.outlierBase },
     });
     for (const [id, val] of Object.entries(data.results || {})) {
       cacheSet('card:' + id, val);
@@ -192,7 +194,8 @@ async function markEventsSeen(ids, all) {
 /* Разбор метаданных (8.8) -- набирается в попапе, не кэшируется: каждый
    вызов должен читать текущее состояние базы, а не вчерашний ответ. */
 async function reviewMetadata(payload) {
-  return api('/api/metadata/review', { method: 'POST', body: payload });
+  const { outlierBase } = await getSettings();
+  return api('/api/metadata/review', { method: 'POST', body: { ...payload, outlier_base: outlierBase } });
 }
 
 async function saveDraft(payload) {
@@ -265,7 +268,12 @@ const HANDLERS = {
   'saveDraft': (m) => saveDraft(m.payload),
   'events': (m) => listEvents(m.unseenOnly),
   'eventsSeen': (m) => markEventsSeen(m.ids, m.all),
-  'eventsScan': () => api('/api/events/scan', { method: 'POST' }).then((r) => { refreshActionBadge(); return r; }),
+  'eventsScan': async () => {
+    const { outlierBase } = await getSettings();
+    const r = await api(`/api/events/scan?outlier_base=${outlierBase}`, { method: 'POST' });
+    refreshActionBadge();
+    return r;
+  },
   'cache:drop': (m) => { if (m.videoId) cacheDropVideo(m.videoId); else cache.clear(); return { ok: true }; },
 };
 

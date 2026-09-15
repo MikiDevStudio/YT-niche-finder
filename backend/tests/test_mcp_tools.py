@@ -614,6 +614,21 @@ def test_outlier_base_period_does_not_punish_a_video_after_a_hot_streak(monkeypa
     assert top["outlierScore"] == 4.0
 
 
+# --------------------------------------------------- база в алертах и разборе
+
+def test_alerts_and_metadata_review_take_the_outlier_base():
+    assert srv.scan_for_alerts(outlier_base="period")["outlierBase"] == "period"
+    review = srv.review_metadata("The Economics of Owning a Gym", niche="hot-streak",
+                                 outlier_base="period")
+    assert review["sample"]["outlierBase"] == "period"
+    try:
+        srv.scan_for_alerts(outlier_base="mean")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown outlier base should raise")
+
+
 # --------------------------------------------------- точки для графика ниши
 
 def test_niche_videos_marks_outliers_fresh_and_filters(monkeypatch):
@@ -702,3 +717,4 @@ if __name__ == "__main__":
         finally:
             mp.undo()
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    sys.exit(1 if failed else 0)  # иначе CI зеленеет при упавших тестах

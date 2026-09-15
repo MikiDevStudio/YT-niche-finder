@@ -17,6 +17,7 @@ returns raw titles, descriptions and thumbnails and never calls a paid LLM API.
 import os
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 import infrastructure.postgres as db
 from infrastructure.categories import repository as C
@@ -45,7 +46,9 @@ def _require_key():
 
 # ============================================================ COLLECT
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def collect_niche(query: str, label: str = None, language: str = None,
                   min_upload_date: str = None, period: str = None, pages: int = 1,
                   order: str = "viewCount", video_duration: str = None,
@@ -72,7 +75,9 @@ def collect_niche(query: str, label: str = None, language: str = None,
         category_id=category_id, period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def collect_trending(regions: list = None, category_ids: list = None,
                      pages: int = 2) -> dict:
     """Snapshot YouTube's own mostPopular chart into the local DB. 1 unit/page.
@@ -88,7 +93,9 @@ def collect_trending(regions: list = None, category_ids: list = None,
                                       pages=pages)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def collect_channel(channel: str, max_videos: int = 100, niche: str = None) -> dict:
     """Pull a channel's recent uploads into the local DB, cheaply.
 
@@ -100,7 +107,9 @@ def collect_channel(channel: str, max_videos: int = 100, niche: str = None) -> d
     return collector.collect_channel(API_KEY, channel, max_videos=max_videos, niche=niche)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def refresh_stats(scope: str = "recent", period: str = "30d", limit: int = 1000,
                   niche: str = None) -> dict:
     """Re-read view/like/comment counts for stored videos and append a snapshot.
@@ -115,7 +124,9 @@ def refresh_stats(scope: str = "recent", period: str = "30d", limit: int = 1000,
                                    limit=limit, niche=niche)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def refresh_channels(channel_ids: list = None, only_tracked: bool = True) -> dict:
     """Snapshot subscriber/view/video counts for channels, for growth tracking.
     1 unit per 50 channels. Note the API rounds subscriberCount to 3 significant
@@ -125,7 +136,9 @@ def refresh_channels(channel_ids: list = None, only_tracked: bool = True) -> dic
                                       only_tracked=only_tracked)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=True))
 def refresh_categories(regions: list = None, hl: str = "en_US") -> dict:
     """Fetch the live category id -> title map per region (1 unit per region).
     Optional: a built-in fallback map ships with the server."""
@@ -133,7 +146,9 @@ def refresh_categories(regions: list = None, hl: str = "en_US") -> dict:
     return C.refresh_categories(API_KEY, regions=tuple(regions or ["US"]), hl=hl)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def backfill_embeddings(limit: int = 1000) -> dict:
     """Compute embeddings for already-collected videos that don't have one yet.
     0 YouTube quota -- pure local compute over title/description already in
@@ -146,7 +161,9 @@ def backfill_embeddings(limit: int = 1000) -> dict:
     return collector.backfill_embeddings(limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=True))
 def video_comments(video_id: str, max_results: int = 100, order: str = "relevance",
                    search_terms: str = None) -> dict:
     """Top-level comments for one video, live from the API. 1 unit, not stored
@@ -165,7 +182,9 @@ def video_comments(video_id: str, max_results: int = 100, order: str = "relevanc
 
 # ============================================================ DISCOVER
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def viral_videos_small_channels(period: str = "7d", period_by: str = "published",
                                 max_subscribers: int = 10000,
                                 min_views: int = 10000,
@@ -203,7 +222,9 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
         sort_by=sort_by, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def most_popular_categories(period: str = "7d", period_by: str = "published",
                             niche: str = None, region: str = None,
                             languages: list = None, max_subscribers: int = None,
@@ -231,7 +252,9 @@ def most_popular_categories(period: str = "7d", period_by: str = "published",
         rank_by=rank_by, min_videos=min_videos, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def trending_keywords(period: str = "24h", period_by: str = "published",
                       niche: str = None, region: str = None,
                       languages: list = None, category_id: str = None,
@@ -260,7 +283,9 @@ def trending_keywords(period: str = "24h", period_by: str = "published",
         outlier_threshold=outlier_threshold, compare_previous=compare_previous)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def top_tags_by_category(period: str = "7d", period_by: str = "published",
                          niche: str = None, region: str = None,
                          exclude_shorts: bool = False, min_videos: int = 3,
@@ -280,7 +305,9 @@ def top_tags_by_category(period: str = "7d", period_by: str = "published",
         exclude_shorts=exclude_shorts, min_videos=min_videos, top_n=top_n)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def recently_added_outlier_channels(period: str = "24h",
                                     period_by: str = "discovered",
                                     min_multiplier: float = 2.0,
@@ -303,7 +330,9 @@ def recently_added_outlier_channels(period: str = "24h",
         exclude_shorts=exclude_shorts, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def high_future_competition(period: str = "30d", period_by: str = "published",
                             niche: str = None, region: str = None,
                             category_id: str = None, min_videos: int = 2,
@@ -320,7 +349,9 @@ def high_future_competition(period: str = "30d", period_by: str = "published",
         category_id=category_id, min_videos=min_videos, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def search_outliers(query: str = None, niche: str = None, languages: list = None,
                     max_subscribers: int = None, max_channel_video_count: int = None,
                     min_upload_date: str = None, min_outlier_score: float = 3.0,
@@ -351,7 +382,9 @@ def search_outliers(query: str = None, niche: str = None, languages: list = None
         min_rpm=min_rpm, max_rpm=max_rpm, sort_by=sort_by, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def niche_overview(niche: str, period: str = "all") -> dict:
     """Saturation and opportunity read on a collected niche: channel-size
     distribution, median outlier, viral skew, Shorts share, top categories and
@@ -359,7 +392,9 @@ def niche_overview(niche: str, period: str = "all") -> dict:
     return q.niche_overview(niche, period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def similar_channels(channel_id: str, niche: str = None, limit: int = 10,
                      min_videos_embedded: int = 1) -> dict:
     """Channels whose collected content reads as semantically closest to this
@@ -374,7 +409,9 @@ def similar_channels(channel_id: str, niche: str = None, limit: int = 10,
                               min_videos_embedded=min_videos_embedded)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def similar_videos(video_id: str, niche: str = None, limit: int = 10,
                    exclude_same_channel: bool = False) -> dict:
     """Videos whose title+description embedding reads closest to this one
@@ -390,7 +427,9 @@ def similar_videos(video_id: str, niche: str = None, limit: int = 10,
                             exclude_same_channel=exclude_same_channel)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def niche_overview_from_channel(channel_id: str, limit: int = 15,
                                 min_videos_embedded: int = 1,
                                 period: str = "all") -> dict:
@@ -406,19 +445,25 @@ def niche_overview_from_channel(channel_id: str, limit: int = 15,
                                          period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_niches() -> list:
     """Every niche collected so far (slug, query, last collected, video count)."""
     return q.list_niches()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def db_stats() -> dict:
     """What is stored locally: channels, videos, niches, snapshots, DB path."""
     return q.db_stats()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def data_coverage(period: str = "24h") -> dict:
     """Can the corpus actually answer a question about this window? Call this
     whenever a section returns fewer results than expected -- it distinguishes
@@ -428,7 +473,9 @@ def data_coverage(period: str = "24h") -> dict:
 
 # ============================================================ TRACK
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def track_channel(channel: str, note: str = None, collect: bool = True,
                   max_videos: int = 100) -> dict:
     """Add a channel to the watchlist so its stats get snapshotted over time.
@@ -446,19 +493,25 @@ def track_channel(channel: str, note: str = None, collect: bool = True,
     return {**res, "tracked": True, "note": note}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=True,
+    idempotent_hint=True, open_world_hint=False))
 def untrack_channel(channel_id: str) -> dict:
     """Stop tracking a channel (history already collected is kept)."""
     return T.untrack(channel_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_tracked_channels() -> list:
     """The watchlist, with how many snapshots exist per channel."""
     return T.list_tracked()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def channel_analytics(channel_id: str, period: str = "30d") -> dict:
     """Full analysis of one channel: profile, upload cadence, performance
     (median vs average views, viral skew), growth over 24h/7d/30d/90d, momentum
@@ -470,28 +523,36 @@ def channel_analytics(channel_id: str, period: str = "30d") -> dict:
     return T.channel_analytics(channel_id, period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def compare_channels(channel_ids: list, period: str = "30d") -> dict:
     """Side-by-side comparison of several channels on the same metrics,
     ranked by median views per subscriber (size-independent)."""
     return T.compare_channels(channel_ids, period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def channel_velocity(channel_id: str, period: str = "30d", limit: int = 25) -> dict:
     """Per-video view velocity: lifetime VPH, true 24h VPH from our snapshots,
     views gained in the last day, and whether each video is heating up or cooling."""
     return T.channel_velocity(channel_id, period=period, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def title_changes(period: str = "7d", channel_id: str = None, limit: int = 50) -> dict:
     """Videos whose title or thumbnail changed between snapshots -- usually a
     creator reacting to underperformance, and a useful competitive signal."""
     return T.title_changes(period=period, channel_id=channel_id, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def best_time_to_publish(niche: str = None, channel_id: str = None,
                          period: str = "90d", min_samples: int = 3,
                          timezone_offset_hours: int = 0) -> dict:
@@ -503,7 +564,9 @@ def best_time_to_publish(niche: str = None, channel_id: str = None,
                                   timezone_offset_hours=timezone_offset_hours)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d",
                    outlier_threshold: float = 3.0, min_videos: int = 4,
                    top_n: int = 25) -> dict:
@@ -515,7 +578,9 @@ def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d
                             min_videos=min_videos, top_n=top_n)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def calibrate_maturity_curve(min_videos: int = 30) -> dict:
     """Measure the real view-accumulation curve from our own snapshots and print
     a replacement for metrics.MATURITY_CURVE, so age-adjusted outlier scores stop
@@ -523,7 +588,9 @@ def calibrate_maturity_curve(min_videos: int = 30) -> dict:
     return T.calibrate_maturity_curve(min_videos=min_videos)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=False))
 def save_item(kind: str, ref_id: str, payload: dict = None, note: str = None,
              folder: str = None) -> dict:
     """Swipe file: save a video or channel id you noticed, with an optional
@@ -533,7 +600,9 @@ def save_item(kind: str, ref_id: str, payload: dict = None, note: str = None,
     return lib.save_item(kind, ref_id, payload=payload, note=note, folder=folder)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_saved_items(kind: str = None, folder: str = None, limit: int = 200) -> list:
     """List the swipe file, optionally filtered by kind ('video'/'channel')
     and/or folder."""
@@ -541,7 +610,9 @@ def list_saved_items(kind: str = None, folder: str = None, limit: int = 200) -> 
     return lib.list_items(kind=kind, folder=folder, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=True,
+    idempotent_hint=True, open_world_hint=False))
 def delete_saved_item(item_id: int) -> dict:
     """Remove one swipe-file entry by id."""
     from application import library as lib
@@ -550,7 +621,9 @@ def delete_saved_item(item_id: int) -> dict:
 
 # ---------------------------------------------------- metadata review (8.8)
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def review_metadata(title: str, description: str = "", tags: list = None,
                     niche: str = None, channel_id: str = None, is_short: bool = False,
                     period: str = "180d") -> dict:
@@ -568,7 +641,9 @@ def review_metadata(title: str, description: str = "", tags: list = None,
                               period=period)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=False))
 def save_draft(title: str, description: str = "", tags: list = None, niche: str = None,
               channel_id: str = None, is_short: bool = False, review: dict = None) -> dict:
     """Save a metadata draft (optionally with the review_metadata snapshot
@@ -579,7 +654,9 @@ def save_draft(title: str, description: str = "", tags: list = None, niche: str 
                          channel_id=channel_id, is_short=is_short, review=review)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_drafts(channel_id: str = None, unpublished_only: bool = False,
                 limit: int = 100) -> list:
     """List saved metadata drafts, optionally only the ones not yet linked
@@ -589,7 +666,9 @@ def list_drafts(channel_id: str = None, unpublished_only: bool = False,
                           limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def link_draft(draft_id: int, video_id: str) -> dict:
     """Call once a saved draft has actually been published, so draft_outcomes
     can later compare what the review predicted to what really happened."""
@@ -597,7 +676,9 @@ def link_draft(draft_id: int, video_id: str) -> dict:
     return mr.link_draft(draft_id, video_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def draft_outcomes(min_age_days: float = 7.0) -> list:
     """For linked drafts old enough to have real view counts, return the
     review snapshot next to the actual outcome -- the only honest way to
@@ -609,7 +690,9 @@ def draft_outcomes(min_age_days: float = 7.0) -> list:
 
 # ------------------------------------------------------------- alerts (8.9)
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def scan_for_alerts() -> dict:
     """Run the alert scan right now instead of waiting for the worker's own
     schedule: new outlier (x>=3) on a tracked channel, a video accelerating
@@ -620,7 +703,9 @@ def scan_for_alerts() -> dict:
     return alerts_mod.scan()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def list_events(unseen_only: bool = False, kind: str = None, limit: int = 100) -> list:
     """List alert events, optionally filtered to unseen ones or one kind
     ('outlier'/'acceleration'/'title_change'/'silence_break')."""
@@ -628,7 +713,9 @@ def list_events(unseen_only: bool = False, kind: str = None, limit: int = 100) -
     return alerts_mod.list_events(unseen_only=unseen_only, kind=kind, limit=limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
 def mark_events_seen(ids: list = None, all_unseen: bool = False) -> dict:
     """Mark specific event ids (or every unseen event, with all_unseen=True)
     as seen."""

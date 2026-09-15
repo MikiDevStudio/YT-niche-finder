@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`backend/tests/test_inspection.py`** — 13 tests for the above that need
   neither Postgres nor an API key (sqlite double for the store, stub for the
   HTTP client).
+- **Tool annotations on all 43 MCP tools** — every tool now declares
+  `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`
+  as explicit booleans, so a client can tell a free local query from one that
+  spends YouTube quota or deletes a row (and OpenAI's directory stops
+  rejecting the server for missing hints). 28 tools are read-only;
+  `destructiveHint` is true only for `untrack_channel` and
+  `delete_saved_item`; `openWorldHint` is true for the 8 tools that reach the
+  YouTube Data API. `collect_*` / `refresh_*` are marked non-idempotent
+  because each call appends a new stats snapshot.
 
 ### Fixed
 

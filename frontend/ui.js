@@ -265,6 +265,90 @@ function lineChart(points, { height = 180, valueLabel = 'значение' } = {
   </svg>`;
 }
 
+/* Точечный график: X — время, Y — значение, по умолчанию в лог-шкале.
+   Цвет точки задаёт вызывающий CSS-токеном (p.color, например '--cat-1'),
+   так что компонент не знает, что такое «канал». big — выделенная точка,
+   hollow — неполная (значение ещё растёт), label — прямая подпись; подписывать
+   стоит единицы точек, остальное несут подсказка и таблица. Хит-зона 24px. */
+function scatterChart(points, { width = 720, height = 320, log = true, valueLabel = 'значение' } = {}) {
+  const pts = (points || []).filter((p) => p.v > 0 && isFinite(new Date(p.t).getTime()));
+  if (pts.length < 2) return empty('нужно минимум две точки');
+  /* width — реальная ширина контейнера: тогда viewBox рисуется 1:1 и 11px
+     текста остаются 11px, а не раздуваются вместе с растянутым SVG. */
+  const W = Math.max(360, Math.round(width)), H = height, m = { t: 14, r: 16, b: 24, l: 52 };
+  const f = log ? Math.log10 : (v) => v;
+  const ts = pts.map((p) => new Date(p.t).getTime());
+  const x0 = Math.min(...ts), x1 = Math.max(...ts);
+  const fv = pts.map((p) => f(p.v));
+  let lo = Math.min(...fv), hi = Math.max(...fv);
+  if (log) { lo = Math.floor(lo * 2) / 2; hi = Math.ceil(hi * 2) / 2; if (hi === lo) hi += 0.5; } else { lo = 0; hi = hi * 1.1 || 1; }
+  const px = (t) => m.l + ((t - x0) / (x1 - x0 || 1)) * (W - m.l - m.r);
+  const py = (v) => m.t + (1 - (f(v) - lo) / (hi - lo || 1)) * (H - m.t - m.b);
+
+  const yt = [];
+  if (log) {
+    for (let e = Math.floor(lo); e <= Math.ceil(hi); e++) {
+      for (const k of [1, 3]) { const v = k * 10 ** e; if (f(v) >= lo - 1e-9 && f(v) <= hi + 1e-9) yt.push(v); }
+    }
+  } else { for (let i = 0; i <= 4; i++) yt.push((hi / 4) * i); }
+
+  /* Подписи X: до ~2.5 месяцев — дни (каждые 3 или 7), дальше — начала
+     месяцев, не больше ~8. Если в окно не попало ни одной — края. */
+  const span = x1 - x0, xt = [];
+  let fmt;
+  const d = new Date(x0); d.setUTCHours(0, 0, 0, 0);
+  if (span <= 75 * 864e5) {
+    const stepDays = span <= 21 * 864e5 ? 3 : 7;
+    d.setUTCDate(d.getUTCDate() + 1);
+    for (; d.getTime() <= x1; d.setUTCDate(d.getUTCDate() + stepDays)) xt.push(d.getTime());
+    fmt = { day: 'numeric', month: 'short' };
+  } else {
+    const step = Math.max(1, Math.ceil(span / 864e5 / 30 / 8));
+    d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+    for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + step)) xt.push(d.getTime());
+    fmt = span > 400 * 864e5 ? { month: 'short', year: '2-digit' } : { month: 'short' };
+  }
+  const xLabel = (t) => new Date(t).toLocaleDateString('ru-RU', xt.length ? fmt : undefined);
+  const xTicks = xt.length ? xt : [x0, x1];
+
+  const order = pts.map((p, i) => [p, ts[i]]).sort((a, b) => Number(!!a[0].big) - Number(!!b[0].big));
+  const dots = order.map(([p, t]) => {
+    const cx = px(t).toFixed(1), cy = py(p.v).toFixed(1);
+    return `<g class="ptg" style="--c:var(${p.color || '--series-1'})">
+      <circle class="pt${p.big ? ' big' : ''}${p.hollow ? ' hollow' : ''}" cx="${cx}" cy="${cy}" r="${p.big ? 7 : 5}"/>
+      <circle class="hit" cx="${cx}" cy="${cy}" r="12" data-tip="${esc(p.tip || `${num(p.v)} ${valueLabel}`)}"/></g>`;
+  }).join('');
+  /* Подписи не складываются стопкой: по порядку labelRank каждая пробует встать
+     справа, потом слева от своей точки, и если места нет — не рисуется вовсе
+     (значение остаётся в подсказке и в таблице). Ширина — оценка по 11px. */
+  const labelled = order.filter(([p]) => p.label)
+    .sort((a, b) => (a[0].labelRank ?? 0) - (b[0].labelRank ?? 0));
+  const placed = labelled.map(([p, t]) => ({ x: px(t) - 8, y: py(p.v) - 8, w: 16, h: 16 }));
+  const overlaps = (r) => placed.some((o) =>
+    r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h);
+  const labels = labelled.map(([p, t]) => {
+    const cx = px(t), cy = py(p.v), w = p.label.length * 6.2 + 4;
+    for (const right of cx + 11 + w > W - m.r ? [false, true] : [true, false]) {
+      const r = { x: right ? cx + 11 : cx - 11 - w, y: cy - 9, w, h: 14 };
+      if (r.x < m.l || r.x + r.w > W - m.r || overlaps(r)) continue;
+      placed.push(r);
+      return `<text class="pt-label" x="${(right ? cx + 11 : cx - 11).toFixed(1)}" y="${(cy + 4).toFixed(1)}"
+        text-anchor="${right ? 'start' : 'end'}">${esc(p.label)}</text>`;
+    }
+    return '';
+  }).join('');
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(valueLabel)} по дате, ${pts.length} точек">
+    ${yt.map((v) => `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${py(v).toFixed(1)}" y2="${py(v).toFixed(1)}"/>
+      <text x="${m.l - 8}" y="${(py(v) + 4).toFixed(1)}" text-anchor="end">${compact(v)}</text>`).join('')}
+    <line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>
+    ${xTicks.map((t, i) => `<text x="${px(t).toFixed(1)}" y="${H - 6}" text-anchor="${
+      xt.length ? 'middle' : i ? 'end' : 'start'}">${esc(xLabel(t))}</text>`).join('')}
+    ${dots}
+    ${labels}
+  </svg>`;
+}
+
 function funnelBlock(res) {
   if (!res.funnel) return '';
   const rows = res.funnel.map((f) =>
@@ -276,4 +360,4 @@ function funnelBlock(res) {
 
 export { $, api, q, num, compact, mult, ago, esc, delta, plural, pl, toast, tile, sectionHead,
          notice, empty, barList, strengthBar, channelRow, videoCard, table, commentList,
-         lineChart, funnelBlock, state };
+         lineChart, scatterChart, funnelBlock, state };

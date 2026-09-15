@@ -79,8 +79,21 @@ def test_outlier_base_is_passed_through_and_validated():
     assert results and all(r["outlierBase"] == "period" for r in results)
     assert {"outlierScoreRolling", "outlierScorePeriod"} <= set(results[0])
 
-    for path in ("/api/search", "/api/overview", f"/api/niches/{NICHE}"):
+    for path in ("/api/search", "/api/overview", f"/api/niches/{NICHE}",
+                 f"/api/niches/{NICHE}/videos"):
         assert client.get(path, params={"outlier_base": "mean"}).status_code == 400, path
+
+
+def test_niche_videos_route_returns_points_and_filters_by_channel():
+    api._rate_hits.clear()
+    body = client.get(f"/api/niches/{NICHE}/videos").json()
+    assert body["found"] and body["videoCount"] == 1
+    assert body["channels"][0]["channelId"] == BIG_CHANNEL
+    point = body["videos"][0]
+    assert {"publishedAt", "views", "lengthSeconds", "isOutlier", "isFresh"} <= set(point)
+
+    other = client.get(f"/api/niches/{NICHE}/videos", params={"channels": "UCnobody, UCnoone"})
+    assert other.json()["videoCount"] == 0
 
 
 if __name__ == "__main__":

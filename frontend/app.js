@@ -1,7 +1,7 @@
 /* Экраны и роутинг. Компоненты и форматтеры — в ui.js. */
 import {
   $, api, q, num, compact, mult, ago, esc, delta, toast, tile, sectionHead,
-  notice, empty, barList, channelRow, videoCard, table, commentList, lineChart, funnelBlock, pl, state,
+  notice, empty, barList, channelRow, videoCard, table, commentList, lineChart, scatterChart, funnelBlock, pl, state,
 } from './ui.js';
 
 const view = $('#view');
@@ -759,11 +759,134 @@ function nicheOverviewBlock(d, head) {
     </div>`;
 }
 
+/* На точечном графике любые два цвета могут оказаться рядом, а различимыми
+   при всех видах дальтонизма в обеих темах остаются только первые три слота
+   палитры (validate_palette.js --pairs all). Поэтому цвет получают три канала
+   с наибольшим числом роликов в нише, остальные — нейтральный «другие».
+   Ранг считается по всей нише, а период, Shorts и скрытые каналы фильтруются
+   на клиенте: цвет следует за каналом и не перекрашивается от фильтра. */
+const CHANNEL_SLOTS = ['--cat-1', '--cat-2', '--cat-3'];
+const FRESH_LABEL = 'моложе 30 дней';
+
+function periodCutoff(period) {
+  const m = /^(\d+)([hd])$/.exec(period || '');
+  return m ? Date.now() - Number(m[1]) * (m[2] === 'h' ? 36e5 : 864e5) : null;
+}
+
+function clock(sec) {
+  if (sec == null) return '—';
+  const h = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = String(sec % 60).padStart(2, '0');
+  return h ? `${h}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`;
+}
+
+/* Общее начало названий ниши («The Economics of Owning») съедает подпись точки —
+   убираем его, если оно есть хотя бы у трети роликов. */
+function commonLead(titles) {
+  const counts = new Map();
+  for (const t of titles) {
+    const lead = String(t || '').split(' ').slice(0, 4).join(' ');
+    counts.set(lead, (counts.get(lead) || 0) + 1);
+  }
+  const [lead, n] = [...counts].sort((a, b) => b[1] - a[1])[0] || ['', 0];
+  return n > 1 && n >= titles.length / 3 ? lead : '';
+}
+
+function nicheScatterFilters(d, opts) {
+  return `<span class="field-label">Каналы на графике</span>
+    ${d.channels.map((c, i) => `<label class="check"><input type="checkbox" data-channel="${esc(c.channelId)}"${
+      opts.hidden.has(c.channelId) ? '' : ' checked'}><i class="legend-dot" style="--c:var(${
+      CHANNEL_SLOTS[i] || '--other'})"></i>${esc(c.title || c.channelId)}</label>`).join('')}
+    <label class="check"><input type="checkbox" data-shorts${opts.noShorts ? ' checked' : ''}>скрыть Shorts</label>`;
+}
+
+function nicheScatter(d, opts) {
+  const slot = new Map(d.channels.map((c, i) => [c.channelId, CHANNEL_SLOTS[i] || '--other']));
+  const name = new Map(d.channels.map((c) => [c.channelId, c.title || c.channelId]));
+  const cut = periodCutoff(state.period);
+  const vids = d.videos.filter((v) => !opts.hidden.has(v.channelId) && !(opts.noShorts && v.isShort)
+    && (cut == null || new Date(v.publishedAt).getTime() >= cut));
+  const outliers = vids.filter((v) => v.isOutlier).sort((a, b) => b.outlierScore - a.outlierScore);
+  const top = new Map(outliers.slice(0, 5).map((v, i) => [v.videoId, i]));
+  const lead = commonLead(d.videos.map((v) => v.title));
+  const shortTitle = (t) => {
+    const s = (lead && t.startsWith(lead) ? t.slice(lead.length) : t).trim().replace(/^(a|an|the)\s+/i, '');
+    return s.length > 24 ? `${s.slice(0, 23)}…` : s;
+  };
+  const base = d.outlierBase === 'period' ? 'против медианы ±15 дней' : 'против медианы 10 прошлых';
+
+  const chart = scatterChart(vids.map((v) => ({
+    t: v.publishedAt, v: v.views, color: slot.get(v.channelId),
+    big: v.isOutlier, hollow: v.isFresh,
+    label: top.has(v.videoId) ? `${shortTitle(v.title || '')} ${mult(v.outlierScore)}` : null,
+    labelRank: top.get(v.videoId),
+    tip: `<b>${num(v.views)}</b> просмотров · <b>${mult(v.outlierScore)}</b> ${base}<br>${esc(v.title)}<br>`
+      + `${esc(name.get(v.channelId))} · ${new Date(v.publishedAt).toLocaleDateString('ru-RU')} · ${clock(v.lengthSeconds)}`
+      + (v.isFresh ? `<br>${FRESH_LABEL}: просмотры ещё набираются` : ''),
+  })), { width: view.clientWidth - 48, height: 360, valueLabel: 'просмотров' });
+
+  const groups = new Map();
+  for (const v of vids) {
+    const k = slot.get(v.channelId);
+    const g = groups.get(k) || { videos: 0, outliers: 0, names: new Set() };
+    g.videos += 1; g.outliers += v.isOutlier ? 1 : 0; g.names.add(name.get(v.channelId));
+    groups.set(k, g);
+  }
+  const legend = [...CHANNEL_SLOTS, '--other'].filter((k) => groups.has(k)).map((k) => {
+    const g = groups.get(k);
+    const label = k === '--other' ? `другие каналы (${g.names.size})` : [...g.names][0];
+    return `<span class="legend-item"><i class="legend-dot" style="--c:var(${k})"></i>${esc(label)}
+      <span class="legend-note">${g.videos} видео · ${g.outliers} аутл.</span></span>`;
+  }).join('')
+    + `<span class="legend-item"><i class="legend-dot big" style="--c:var(--muted)"></i>аутлаер ≥ ${d.outlierThreshold}x</span>`
+    + `<span class="legend-item"><i class="legend-dot hollow" style="--c:var(--muted)"></i>${FRESH_LABEL}</span>`;
+
+  return `<div class="card">
+    ${sectionHead('Ролики ниши во времени', `${pl(vids.length, 'ролик', 'ролика', 'роликов')} · ${
+      pl(outliers.length, 'аутлаер', 'аутлаера', 'аутлаеров')} · ${plabel(state.period)} · просмотры в лог-шкале`)}
+    <div class="legend">${legend}</div>
+    ${chart}
+    <details class="table-twin"><summary>Аутлаеры таблицей (${outliers.length})</summary>
+      ${table([
+        { label: 'Видео', wrap: true, render: (v) => `<a href="https://www.youtube.com/watch?v=${esc(v.videoId)}" target="_blank" rel="noopener">${esc(v.title)}</a>` },
+        { label: 'Канал', render: (v) => esc(name.get(v.channelId)) },
+        { label: 'Опубликовано', render: (v) => new Date(v.publishedAt).toLocaleDateString('ru-RU') },
+        { label: 'Просмотры', num: true, render: (v) => num(v.views) },
+        { label: 'Множитель', num: true, render: (v) => mult(v.outlierScore) },
+        { label: 'Длина', num: true, render: (v) => clock(v.lengthSeconds) },
+      ], outliers)}
+    </details>
+  </div>`;
+}
+
 async function viewNiche(slug) {
-  const d = await api(`/api/niches/${encodeURIComponent(slug)}${q({ period: state.period, outlier_base: state.outlierBase })}`);
-  if (!d.found) { view.innerHTML = notice(esc(d.hint || 'ниша не найдена')); return; }
-  view.innerHTML = nicheOverviewBlock(d,
-    sectionHead(`Ниша: ${slug}`, `${esc(d.query || '')} · ${plabel(state.period)}`));
+  const [d, pts] = await Promise.all([
+    api(`/api/niches/${encodeURIComponent(slug)}${q({ period: state.period, outlier_base: state.outlierBase })}`),
+    api(`/api/niches/${encodeURIComponent(slug)}/videos${q({ outlier_base: state.outlierBase })}`),
+  ]);
+  if (!d.found && !pts.videoCount) { view.innerHTML = notice(esc(d.hint || 'ниша не найдена')); return; }
+
+  const key = `nf.scatter.${slug}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(key) || '{}'); } catch { /* приватный режим */ }
+  const opts = { hidden: new Set(saved.hidden || []), noShorts: !!saved.noShorts };
+
+  view.innerHTML = (d.found
+    ? nicheOverviewBlock(d, sectionHead(`Ниша: ${slug}`, `${esc(d.query || '')} · ${plabel(state.period)}`))
+    : notice(esc(d.hint || `за ${plabel(state.period)} роликов нет`)))
+    + `<div class="scatter-filters" id="scatterFilters">${nicheScatterFilters(pts, opts)}</div>
+       <div id="scatterCard">${nicheScatter(pts, opts)}</div>`;
+
+  $('#scatterFilters').addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.dataset.channel) {
+      if (el.checked) opts.hidden.delete(el.dataset.channel); else opts.hidden.add(el.dataset.channel);
+    }
+    if ('shorts' in el.dataset) opts.noShorts = el.checked;
+    try {
+      localStorage.setItem(key, JSON.stringify({ hidden: [...opts.hidden], noShorts: opts.noShorts }));
+    } catch { /* фильтр просто не запомнится */ }
+    $('#scatterCard').innerHTML = nicheScatter(pts, opts);
+  });
 }
 
 /* ----------------------------------------------------------------- Канал */

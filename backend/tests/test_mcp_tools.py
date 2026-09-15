@@ -453,6 +453,95 @@ def test_track_then_untrack_keeps_what_was_already_collected(monkeypatch):
     assert _count("SELECT COUNT(*) FROM videos WHERE channel_id=?", (cid,)) == 1
 
 
+def _stored_channel(cid, handle, title="Stored Channel"):
+    conn = db.get_conn()
+    db.upsert_channel(conn, {
+        "channel_id": cid, "title": title, "custom_url": handle, "description": "",
+        "subscriber_count": 1000, "video_count": 10, "view_count": 100000,
+        "hidden_subs": 0, "updated_at": "2026-09-01T00:00:00Z",
+    })
+    conn.commit()
+    conn.close()
+
+
+def _tracked_ids():
+    return {c["channel_id"] for c in srv.list_tracked_channels()}
+
+
+def test_track_without_collect_resolves_a_stored_handle_for_free(monkeypatch):
+    # Issue #14: collect=False saved "@handle" as the channel id, and the worker
+    # never snapshotted such a row.
+    _no_network(monkeypatch)
+    cid = "UC" + "trackhandlelocal".ljust(22, "0")
+    _stored_channel(cid, "@localhandle")
+    conn = db.get_conn()
+    db.track_channel(conn, "@LocalHandle")  # the row the bug used to leave behind
+    conn.commit()
+    conn.close()
+
+    out = srv.track_channel("@LocalHandle", collect=False)
+    assert out["channelId"] == cid and out["tracked"] is True
+    assert out["resolvedFrom"] == "@LocalHandle"
+    assert out["quota"]["units_from_shared_pool"] == 0
+    assert cid in _tracked_ids()
+    assert _count("SELECT COUNT(*) FROM tracked_channels WHERE channel_id='@LocalHandle'") == 0
+
+    assert srv.untrack_channel("youtube.com/@localhandle")["channelId"] == cid
+    assert cid not in _tracked_ids()
+
+
+def test_track_without_collect_resolves_an_unknown_handle_through_the_api(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UC" + "trackhandleapi".ljust(22, "0")
+    calls = []
+
+    def by_handle(key, handle, **kw):
+        calls.append(handle)
+        item = _api_channel(cid, title="Via Handle")
+        item["snippet"]["customUrl"] = "@viahandle"
+        return item
+
+    monkeypatch.setattr(yt, "channel_by_handle", by_handle)
+    out = srv.track_channel("https://www.youtube.com/@viahandle/videos", collect=False)
+    assert out["channelId"] == cid and calls == ["viahandle"]
+    assert out["quota"]["units_from_shared_pool"] == 1
+    # the channel is stored, so the watchlist has more than a bare id
+    row = next(c for c in srv.list_tracked_channels() if c["channel_id"] == cid)
+    assert row["title"] == "Via Handle"
+    srv.untrack_channel(cid)
+
+
+def test_track_an_unknown_handle_tracks_nothing(monkeypatch):
+    _no_network(monkeypatch)
+    monkeypatch.setattr(yt, "channel_by_handle", lambda key, handle, **kw: None)
+    out = srv.track_channel("@ghost-channel", collect=False)
+    assert out["tracked"] is False and "not found" in out["error"]
+    assert out["quota"]["units_from_shared_pool"] == 2  # forHandle + forUsername
+    assert _count("SELECT COUNT(*) FROM tracked_channels WHERE channel_id='@ghost-channel'") == 0
+
+
+def test_migrate_rekeys_watchlist_rows_saved_under_a_handle():
+    cid = "UC" + "migratehandle".ljust(22, "0")
+    _stored_channel(cid, "@migratehandle")
+    conn = db.get_conn()
+    for ref, note in (("@MigrateHandle", "old note"), ("@not-collected-yet", None)):
+        db.track_channel(conn, ref, note)
+    db.migrate(conn)
+    conn.commit()
+    rows = {r["channel_id"]: dict(r) for r in conn.execute(
+        "SELECT channel_id, note, active FROM tracked_channels WHERE channel_id IN (?, ?, ?)",
+        (cid, "@MigrateHandle", "@not-collected-yet")).fetchall()}
+    conn.execute("DELETE FROM tracked_channels WHERE channel_id IN (?, ?)",
+                 (cid, "@not-collected-yet"))
+    conn.commit()
+    conn.close()
+
+    assert rows[cid]["active"] == 1 and rows[cid]["note"] == "old note"
+    assert "@MigrateHandle" not in rows
+    # resolving it would cost quota at startup: left for the next track_channel
+    assert "@not-collected-yet" in rows
+
+
 # --------------------------------------------------- alerts
 
 def test_scan_for_alerts_never_duplicates_and_seen_can_be_cleared():

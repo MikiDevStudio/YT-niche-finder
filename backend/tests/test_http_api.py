@@ -121,6 +121,34 @@ def test_inspection_and_alerts_accept_the_outlier_base():
                       params={**params, "outlier_base": "mean"}).status_code == 400
 
 
+def test_track_route_resolves_a_handle_to_the_channel_id():
+    # Issue #14: the dashboard and the extension track through this route,
+    # which used to store whatever channel_id it was given.
+    api._rate_hits.clear()
+    cid = "UC" + "httptrackhandle".ljust(22, "0")
+    conn = db.get_conn()
+    db.upsert_channel(conn, {"channel_id": cid, "title": "Tracked By Handle",
+                             "custom_url": "@httptrack", "description": "", "hidden_subs": 0})
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/api/channels/track", json={"channel_id": "@httptrack"})
+    assert resp.status_code == 200
+    assert resp.json()["channelId"] == cid
+    assert cid in {r["channel_id"] for r in client.get("/api/channels/tracked").json()["channels"]}
+
+    key, api.API_KEY = api.API_KEY, ""
+    try:
+        missing = client.post("/api/channels/track", json={"channel_id": "@nobody-here"})
+    finally:
+        api.API_KEY = key
+    assert missing.status_code == 404
+    assert "YOUTUBE_API_KEY" in missing.json()["detail"]
+
+    assert client.delete("/api/channels/tracked/@httptrack").json()["channelId"] == cid
+    assert cid not in {r["channel_id"] for r in client.get("/api/channels/tracked").json()["channels"]}
+
+
 if __name__ == "__main__":
     setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

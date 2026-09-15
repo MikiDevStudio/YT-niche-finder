@@ -104,6 +104,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   never showed a niche built from channels. The niche is slugified like
   `collect_niche` does, and `init_db` backfills rows for niches collected
   before the fix.
+- **Tracking a channel by @handle stores its UC id** (#14).
+  `track_channel(collect=False)` and `POST /api/channels/track` saved the
+  handle as typed, and the worker, which snapshots by UC id, never recorded
+  history for such rows. Both now resolve the handle from `channels` for free,
+  or through `channels.list?forHandle` (1 unit) when the channel isn't
+  collected yet, and return `quota`. `untrack_channel` accepts a handle of a
+  stored channel. `init_db` re-keys existing handle rows whose channel is
+  already in the database.
 
 - **`scripts/mcp-docker.sh` больше не полагается на `docker run --env-file`.**
   `docker compose` читает `.env` по правилам dotenv и снимает кавычки вокруг

@@ -37,6 +37,7 @@ from infrastructure.postgres.repositories import (  # noqa: F401
     upsert_niche,
     track_channel,
     untrack_channel,
+    channel_id_for_handle,
     new_chart_snapshot,
     add_chart_entry,
     upsert_category,

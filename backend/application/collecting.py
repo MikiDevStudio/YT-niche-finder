@@ -14,6 +14,7 @@ import json
 import re
 import infrastructure.postgres as db
 import infrastructure.youtube.client as yt
+from domain import channel_refs as refs
 from domain import metrics as M
 from domain import periods as P
 
@@ -333,23 +334,54 @@ def collect_trending(api_key: str, regions=("US",), category_ids=(None,),
 
 # ---------------------------------------------------------- collect_channel
 
-CHANNEL_ID_RE = re.compile(r"(UC[\w-]{22})")
-HANDLE_RE = re.compile(r"@([\w.\-]+)")
-
-
 def resolve_channel(api_key: str, ref: str):
     """Accept a raw UC id, an @handle, or any youtube.com channel URL."""
-    ref = (ref or "").strip()
-    m = CHANNEL_ID_RE.search(ref)
-    if m:
-        items = yt.channels_list(api_key, [m.group(1)])
+    parsed = refs.parse_channel_ref(ref)
+    if parsed is None:
+        return None
+    kind, value = parsed
+    if kind == "id":
+        items = yt.channels_list(api_key, [value])
         return items[0] if items else None
-    m = HANDLE_RE.search(ref)
-    if m:
-        return yt.channel_by_handle(api_key, m.group(1))
-    if ref and not ref.startswith("http"):
-        return yt.channel_by_handle(api_key, ref)
-    return None
+    return yt.channel_by_handle(api_key, value)
+
+
+def resolve_channel_id(conn, api_key: str, ref: str) -> dict:
+    """The UC id behind a channel ref, without collecting the channel.
+
+    A UC id, bare or inside a URL, is taken as is. A handle is looked up in
+    channels.custom_url first, which is free; only a miss calls
+    channels.list?forHandle (1 unit, plus 1 for the legacy forUsername
+    fallback when forHandle finds nothing), and the channel found is stored so
+    the watchlist shows its title right away. Without an API key a miss is an
+    error, not a guess.
+
+    Returns {"channelId", "quota"} or {"error", "quota"}.
+    """
+    def quota(units):
+        return {"units_from_shared_pool": units, "search_calls": 0}
+
+    parsed = refs.parse_channel_ref(ref)
+    if parsed is None:
+        return {"error": f"not a channel id, @handle or channel URL: {ref}", "quota": quota(0)}
+    kind, value = parsed
+    if kind == "id":
+        return {"channelId": value, "quota": quota(0)}
+
+    cid = db.channel_id_for_handle(conn, value)
+    if cid:
+        return {"channelId": cid, "quota": quota(0)}
+    if not api_key:
+        return {"error": f"@{value.lstrip('@')} is not in the local database and "
+                         "YOUTUBE_API_KEY is not set", "quota": quota(0)}
+
+    item = yt.channel_by_handle(api_key, value)
+    custom_url = ((item or {}).get("snippet") or {}).get("customUrl") or ""
+    units = 1 if custom_url.lower() == "@" + value.lstrip("@").lower() else 2
+    if not item:
+        return {"error": f"channel not found: {ref}", "quota": quota(units)}
+    store_channels(conn, [item])
+    return {"channelId": item["id"], "quota": quota(units)}
 
 
 def collect_channel(api_key: str, channel_ref: str, max_videos: int = 100,

@@ -238,13 +238,20 @@ SORTS = {
 }
 
 
+# small_channels -- the thresholds exactly as passed (the default behaviour)
+# niche_all      -- every channel of the niche: max_subscribers, min_views and
+#                   min_views_per_subscriber are dropped, so big competitors
+#                   show up next to small ones. Requires a niche.
+VIRAL_PRESETS = ("small_channels", "niche_all")
+
+
 def viral_videos_small_channels(period="7d", period_by="published",
                                 max_subscribers=10000, min_views=10000,
                                 min_views_per_subscriber=1.0, min_outlier_score=None,
                                 niche=None, languages=None, region=None,
                                 category_id=None, max_channel_video_count=None,
                                 exclude_shorts=True, only_shorts=False,
-                                sort_by="viral", limit=25) -> dict:
+                                sort_by="viral", limit=25, preset=None) -> dict:
     """Small channel + big video = the algorithm chose the content, not the brand.
 
     NexLev's version of this list is literally `views >= X AND subs <= Y` sorted
@@ -252,7 +259,18 @@ def viral_videos_small_channels(period="7d", period_by="published",
     actually matter: views-per-subscriber (so a 5k-view video on a 200-sub
     channel outranks a 50k-view video on a 500k-sub one) and age normalisation
     (so a 12-hour-old rocket is not buried under a 3-week-old video).
+
+    `preset` -- see VIRAL_PRESETS. Raises ValueError for an unknown preset or
+    for niche_all without a niche.
     """
+    preset = preset or "small_channels"
+    if preset not in VIRAL_PRESETS:
+        raise ValueError(f"unknown preset '{preset}', expected one of {VIRAL_PRESETS}")
+    if preset == "niche_all":
+        if not niche:
+            raise ValueError("preset='niche_all' needs a niche")
+        max_subscribers = min_views = min_views_per_subscriber = None
+
     # Filters are applied here rather than in SQL so we can count survivors at
     # each step: "matched: 0" with no explanation is useless, and the usual
     # cause is a default threshold, not an empty corpus.
@@ -287,6 +305,7 @@ def viral_videos_small_channels(period="7d", period_by="published",
     return {
         "period": period,
         "periodBy": period_by,
+        "preset": preset,
         "filters": {
             "maxSubscribers": max_subscribers, "minViews": min_views,
             "minViewsPerSubscriber": min_views_per_subscriber,

@@ -60,7 +60,9 @@ upcoming competition, categories, keywords, viral videos.
 
 Videos from small channels, with filters (subscribers, views, VSR, publish
 window) and a funnel underneath: shows exactly which threshold filtered out
-the results, instead of just an empty list.
+the results, instead of just an empty list. With a niche selected, «Каналы:
+все каналы ниши» drops the subscriber, view and VSR filters and shows the
+niche's big competitors too.
 
 ![Viral videos](../assets/viral.jpg)
 

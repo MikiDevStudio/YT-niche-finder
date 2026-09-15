@@ -518,6 +518,73 @@ def test_thin_read_only_tools_answer_on_an_empty_corpus():
     assert isinstance(changes, dict)
 
 
+# --------------------------------------------------- ниша из collect_channel
+
+def _fake_channel_upload(monkeypatch, cid, vid, subs=1000, views=1000):
+    _no_network(monkeypatch)
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, subs=subs)])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": vid}], 1))
+    monkeypatch.setattr(yt, "videos_list",
+                        lambda k, ids, **kw: [_api_video(v, cid, views=views) for v in ids])
+
+
+def test_collect_channel_with_niche_creates_the_niche_row(monkeypatch):
+    cid = "UC" + "nicherow".ljust(22, "0")
+    _fake_channel_upload(monkeypatch, cid, "vnicherow1")
+
+    out = srv.collect_channel(cid, niche="Channel Built Niche")
+
+    # slug как у collect_niche, иначе фильтр niche=... в разделах не совпадёт
+    assert out["niche"] == "channel-built-niche"
+    niches = {n["slug"]: n for n in srv.list_niches()}
+    assert "channel-built-niche" in niches, "ниша из collect_channel не видна в list_niches"
+    assert niches["channel-built-niche"]["label"] == "Channel Built Niche"
+    assert niches["channel-built-niche"]["video_count"] == 1
+
+
+def test_init_db_backfills_niche_rows_for_orphaned_video_links():
+    # так выглядит база, собранная collect_channel(niche=...) до исправления
+    conn = db.get_conn()
+    db.link_video_niche(conn, "vorphan1", "orphan-niche")
+    conn.commit()
+    conn.close()
+    assert "orphan-niche" not in {n["slug"] for n in srv.list_niches()}
+
+    db.init_db()
+    db.init_db()  # запускается на каждом старте -- повтор не должен падать
+
+    assert "orphan-niche" in {n["slug"] for n in srv.list_niches()}
+
+
+# --------------------------------------------------- viral: пресет niche_all
+
+def test_viral_niche_all_preset_shows_big_channels_of_the_niche(monkeypatch):
+    cid = "UC" + "bigcompetitor".ljust(22, "0")
+    _fake_channel_upload(monkeypatch, cid, "vbigcomp1", subs=74600, views=55000)
+    srv.collect_channel(cid, niche="preset-niche")
+
+    small = srv.viral_videos_small_channels(period="all", niche="preset-niche")
+    assert small["matched"] == 0, "74.6K подписчиков режутся дефолтным max_subscribers"
+
+    full = srv.viral_videos_small_channels(period="all", niche="preset-niche",
+                                           preset="niche_all")
+    assert full["preset"] == "niche_all"
+    assert full["filters"]["maxSubscribers"] is None
+    assert [r["videoId"] for r in full["results"]] == ["vbigcomp1"]
+
+
+def test_viral_niche_all_preset_requires_a_niche():
+    for kwargs in ({"preset": "niche_all"}, {"preset": "no-such-preset", "niche": "x"}):
+        try:
+            srv.viral_videos_small_channels(**kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {kwargs}")
+
+
 if __name__ == "__main__":
     setup_module()
 

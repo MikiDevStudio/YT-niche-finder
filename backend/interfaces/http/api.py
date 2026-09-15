@@ -178,13 +178,16 @@ def viral(period: str = "7d", period_by: str = "published",
           min_outlier_score: float = None, niche: str = None,
           region: str = None, category_id: str = None,
           exclude_shorts: bool = True, only_shorts: bool = False,
-          sort_by: str = "viral", limit: int = 24):
-    return trends.viral_videos_small_channels(
-        period=period, period_by=period_by, max_subscribers=max_subscribers,
-        min_views=min_views, min_views_per_subscriber=min_views_per_subscriber,
-        min_outlier_score=min_outlier_score, niche=niche, region=region,
-        category_id=category_id, exclude_shorts=exclude_shorts,
-        only_shorts=only_shorts, sort_by=sort_by, limit=limit)
+          sort_by: str = "viral", limit: int = 24, preset: str = None):
+    try:
+        return trends.viral_videos_small_channels(
+            period=period, period_by=period_by, max_subscribers=max_subscribers,
+            min_views=min_views, min_views_per_subscriber=min_views_per_subscriber,
+            min_outlier_score=min_outlier_score, niche=niche, region=region,
+            category_id=category_id, exclude_shorts=exclude_shorts,
+            only_shorts=only_shorts, sort_by=sort_by, limit=limit, preset=preset)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/categories")

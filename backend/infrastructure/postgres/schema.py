@@ -221,12 +221,30 @@ def migrate(conn):
             if col not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
                 added.append(f"{table}.{col}")
+    _backfill_niche_rows(conn)
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (str(SCHEMA_VERSION),),
     )
     return added
+
+
+def _backfill_niche_rows(conn):
+    """Give every slug in video_niches a row in niches.
+
+    collect_channel(niche=...) used to link videos without creating the niche
+    row, so list_niches and the dashboard's niche picker never saw those
+    niches. The collection date is unknown for such rows -- now() stands in."""
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO niches (slug, query, label, created_at, last_collected_at) "
+        "SELECT DISTINCT vn.niche_slug, NULL, vn.niche_slug, ?, ? "
+        "FROM video_niches vn LEFT JOIN niches n ON n.slug = vn.niche_slug "
+        "WHERE n.slug IS NULL "
+        "ON CONFLICT (slug) DO NOTHING",
+        (ts, ts),
+    )
 
 
 def init_db():

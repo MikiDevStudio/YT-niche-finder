@@ -62,8 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   what the extension actually sends (~120-200 requests a minute while
   scrolling search results). Static frontend files are not counted, and the
   429 still carries CORS headers.
+- **`preset="niche_all"` for `viral_videos_small_channels`** (MCP, `GET
+  /api/viral`, `cli.py viral --preset`) — every channel of the selected niche,
+  without the `max_subscribers` / `min_views` / `min_views_per_subscriber`
+  filters, so big competitors show up next to small ones. Requires a niche;
+  the dashboard offers it as «Каналы: все каналы ниши» once a niche is picked.
 
 ### Fixed
+
+- **`collect_channel(..., niche=X)` now creates the niche row.** It used to
+  write only `video_niches`, so `list_niches` and the dashboard's niche picker
+  never showed a niche built from channels. The niche is slugified like
+  `collect_niche` does, and `init_db` backfills rows for niches collected
+  before the fix.
 
 - **`scripts/mcp-docker.sh` больше не полагается на `docker run --env-file`.**
   `docker compose` читает `.env` по правилам dotenv и снимает кавычки вокруг

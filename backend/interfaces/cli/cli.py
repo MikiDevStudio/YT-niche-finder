@@ -148,7 +148,7 @@ def cmd_viral(args):
         period=args.period, period_by=args.period_by,
         max_subscribers=args.max_subscribers, min_views=args.min_views,
         min_views_per_subscriber=args.min_vsr, niche=args.niche,
-        sort_by=args.sort_by, limit=args.limit))
+        sort_by=args.sort_by, limit=args.limit, preset=args.preset))
 
 
 def cmd_categories(args):
@@ -241,6 +241,9 @@ def main():
     p.add_argument("--min-views", type=int, default=10000)
     p.add_argument("--min-vsr", type=float, default=1.0)
     p.add_argument("--sort-by", default="viral")
+    p.add_argument("--preset", choices=["small_channels", "niche_all"],
+                   help="niche_all: все каналы ниши без фильтров подписчиков/просмотров/VSR "
+                        "(нужен --niche)")
     p.set_defaults(fn=cmd_viral)
 
     p = period_args(sub.add_parser("categories", help="популярные категории"))

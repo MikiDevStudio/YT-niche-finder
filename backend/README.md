@@ -331,6 +331,7 @@ answers "what's new that I found". To reproduce NexLev's behavior, pass
 ```
 viral_videos_small_channels(period="24h", max_subscribers=10000, sort_by="viral")
 viral_videos_small_channels(period="24h", period_by="discovered")   # like NexLev
+viral_videos_small_channels(period="all", niche="brain", preset="niche_all")  # every channel of the niche, big ones too
 recently_added_outlier_channels(period="24h")
 most_popular_categories(period="7d", rank_by="channels")
 trending_keywords(period="24h", sort_by="trend")

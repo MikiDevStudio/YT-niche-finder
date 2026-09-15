@@ -9,6 +9,8 @@
 127.0.0.1 -- внутри лежит ваш API-ключ, наружу его выставлять незачем.
 """
 import os
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Body
@@ -48,6 +50,56 @@ C.seed_fallback()
 
 app = FastAPI(title="niche-finder", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
+# --------------------------------------------------------------- rate limiting
+#
+# Сервис слушает только 127.0.0.1, поэтому это не защита от чужого трафика, а
+# предохранитель от зациклившегося клиента: расширение или скрипт, ушедший в
+# бесконечный ретрай, иначе молча жжёт CPU и коннекты к Postgres.
+#
+# Дефолт подобран под реальное поведение расширения, а не наугад: оно шлёт до
+# 40 id за один /api/inspect/videos с флашем раз в 500 мс (extension/content.js)
+# и до четырёх параллельных запросов на панель канала (extension/background.js).
+# При быстрой прокрутке выдачи это ~120-200 запросов в минуту, так что 600
+# оставляет тройной запас и всё равно ловит цикл, который делает тысячи.
+# RATE_LIMIT_PER_MINUTE=0 выключает лимитер совсем.
+RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "600") or 0)
+
+# client host -> времена запросов за последнюю минуту. На 127.0.0.1 ключей
+# всегда один-два, так что чистить словарь целиком незачем.
+_rate_hits = defaultdict(deque)
+
+
+@app.middleware("http")
+async def rate_limit(request, call_next):
+    """Скользящее окно в одну минуту на /api/*. Статику фронта не трогаем:
+    одна загрузка дашборда стоит десятка файлов и съедала бы бюджет."""
+    if RATE_LIMIT_PER_MINUTE <= 0 or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    hits = _rate_hits[client]
+    while hits and hits[0] <= now - 60.0:
+        hits.popleft()
+
+    if len(hits) >= RATE_LIMIT_PER_MINUTE:
+        retry_after = max(1, int(60.0 - (now - hits[0])) + 1)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": f"Больше {RATE_LIMIT_PER_MINUTE} запросов в минуту "
+                               f"к /api. Повторите через {retry_after} с или "
+                               f"поднимите RATE_LIMIT_PER_MINUTE в .env."},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    hits.append(now)
+    return await call_next(request)
+
+
+# Лимитер объявлен ВЫШЕ CORS намеренно: последний добавленный middleware в
+# Starlette оказывается внешним, поэтому так CORS оборачивает лимитер и ответ
+# 429 тоже уезжает с нужными заголовками -- иначе расширение увидело бы вместо
+# честного 429 непрозрачную ошибку CORS.
 # Расширение для Chrome ходит сюда со своего origin (chrome-extension://...).
 # Service worker с host_permissions обошёлся бы и без CORS, но с заголовками
 # запросы можно отлаживать прямо из консоли страницы. Сервис слушает только

@@ -54,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   — and what one gets wrong: `www.w3.org` is the Atom namespace identifier in
   `rss.py`, not a host anything connects to.
 
+- **Rate limiting on the HTTP API** — a sliding one-minute window over
+  `/api/*`, no new dependency. `RATE_LIMIT_PER_MINUTE` defaults to 600 and 0
+  turns it off; over the limit the API answers 429 with `Retry-After`. The
+  service listens on `127.0.0.1`, so this is a fuse against a looping client
+  rather than a defence against outside traffic, and the default is sized from
+  what the extension actually sends (~120-200 requests a minute while
+  scrolling search results). Static frontend files are not counted, and the
+  429 still carries CORS headers.
+
 ### Fixed
 
 - **`scripts/mcp-docker.sh` больше не полагается на `docker run --env-file`.**

@@ -42,6 +42,7 @@ jobs:
         run: |
           coverage run --source=. --omit="tests/*" tests/test_smoke.py
           coverage run -a --source=. --omit="tests/*" tests/test_mcp_tools.py
+          coverage run -a --source=. --omit="tests/*" tests/test_http_rate_limit.py
           coverage report -m
           coverage json -o /tmp/coverage_full.json
           python3 -c "

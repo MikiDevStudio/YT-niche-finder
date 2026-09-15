@@ -358,7 +358,12 @@ def collect_channel(api_key: str, channel_ref: str, max_videos: int = 100,
 
     1 unit per 50 videos and no 500-result cap, versus burning the daily search
     budget for a worse, capped result.
+
+    `niche` is slugified the same way collect_niche slugifies its label, and
+    the niche row is created (or its last_collected_at bumped) so list_niches
+    sees a niche built from channels alone.
     """
+    slug = slugify(niche) if niche else None
     ch = resolve_channel(api_key, channel_ref)
     if not ch:
         return {"error": f"channel not found: {channel_ref}"}
@@ -373,12 +378,15 @@ def collect_channel(api_key: str, channel_ref: str, max_videos: int = 100,
     conn = db.get_conn()
     now = db.now_iso()
     store_channels(conn, [ch], now)
-    stored = store_videos(conn, items, niche_slug=niche, embed=embed, now=now)
+    if slug:
+        db.upsert_niche(conn, slug, None, niche)
+    stored = store_videos(conn, items, niche_slug=slug, embed=embed, now=now)
     conn.commit()
     conn.close()
     return {
         "channelId": ch["id"],
         "channelTitle": (ch.get("snippet") or {}).get("title"),
+        "niche": slug,
         "videos_found": len(ids), "videos_stored": stored,
         "quota": _quota(0, len(ids), 1, playlist_calls=playlist_calls),
     }

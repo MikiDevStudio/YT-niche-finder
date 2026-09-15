@@ -298,25 +298,35 @@ async function viewOverview() {
 
 async function viewViral() {
   const p = { period_by: 'discovered', max_subscribers: 100000, min_views: 1000,
-              min_views_per_subscriber: 0.5, sort_by: 'viral', limit: 48 };
+              min_views_per_subscriber: 0.5, sort_by: 'viral', limit: 48, preset: 'small_channels' };
   Object.assign(p, JSON.parse(localStorage.getItem('nf.viral') || '{}'), base());
-  const d = await api(`/api/viral${q(p)}`);
+  /* «Все каналы ниши» имеет смысл только при выбранной нише: без неё это был бы
+     весь корпус. Сохранённый пресет не теряется -- просто ждёт, пока нишу выберут. */
+  const nicheAll = p.preset === 'niche_all' && !!state.niche;
+  const d = await api(`/api/viral${q({ ...p, preset: nicheAll ? 'niche_all' : null })}`);
+  const off = nicheAll ? ' disabled' : '';
 
   view.innerHTML = `
     <div class="card">
-      ${sectionHead('Вирусные видео у маленьких каналов', plabel(state.period))}
+      ${sectionHead(nicheAll ? `Все видео ниши ${esc(state.niche)}` : 'Вирусные видео у маленьких каналов',
+        plabel(state.period))}
       <div class="form-row">
+        <label class="field"><span class="field-label">Каналы</span>
+          <select id="fPreset"${state.niche ? '' : ' disabled title="Выберите нишу в шапке"'}>
+            <option value="small_channels"${nicheAll ? '' : ' selected'}>маленькие, по фильтрам</option>
+            <option value="niche_all"${nicheAll ? ' selected' : ''}>все каналы ниши</option>
+          </select></label>
         <label class="field"><span class="field-label">Окно считается по</span>
           <select id="fPeriodBy">
             <option value="published"${p.period_by === 'published' ? ' selected' : ''}>дате публикации</option>
             <option value="discovered"${p.period_by === 'discovered' ? ' selected' : ''}>попаданию в базу</option>
           </select></label>
         <label class="field"><span class="field-label">Подписчиков не больше</span>
-          <input type="number" id="fSubs" value="${p.max_subscribers}" step="1000"></label>
+          <input type="number" id="fSubs" value="${p.max_subscribers}" step="1000"${off}></label>
         <label class="field"><span class="field-label">Просмотров не меньше</span>
-          <input type="number" id="fViews" value="${p.min_views}" step="1000"></label>
+          <input type="number" id="fViews" value="${p.min_views}" step="1000"${off}></label>
         <label class="field"><span class="field-label">VSR не меньше</span>
-          <input type="number" id="fVsr" value="${p.min_views_per_subscriber}" step="0.5"></label>
+          <input type="number" id="fVsr" value="${p.min_views_per_subscriber}" step="0.5"${off}></label>
         <label class="field"><span class="field-label">Сортировка</span>
           <select id="fSort">
             ${[['viral', 'вирусность'], ['vsr', 'просмотров на подписчика'], ['views', 'просмотры'],
@@ -332,8 +342,12 @@ async function viewViral() {
                        : empty('под эти фильтры ничего не попало')}
     ${funnelBlock(d)}`;
 
+  $('#fPreset').addEventListener('change', (e) => {
+    for (const id of ['fSubs', 'fViews', 'fVsr']) $(`#${id}`).disabled = e.target.value === 'niche_all';
+  });
   $('#applyViral').addEventListener('click', () => {
     localStorage.setItem('nf.viral', JSON.stringify({
+      preset: state.niche ? $('#fPreset').value : p.preset,
       period_by: $('#fPeriodBy').value,
       max_subscribers: +$('#fSubs').value,
       min_views: +$('#fViews').value,

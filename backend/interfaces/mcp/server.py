@@ -194,7 +194,8 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
                                 category_id: str = None,
                                 max_channel_video_count: int = None,
                                 exclude_shorts: bool = True, only_shorts: bool = False,
-                                sort_by: str = "viral", limit: int = 25) -> dict:
+                                sort_by: str = "viral", limit: int = 25,
+                                preset: str = None) -> dict:
     """Videos that went far beyond their channel's size, in a time window. FREE.
 
     period: 24h | 48h | 7d | 30d | 90d | all
@@ -205,6 +206,10 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
     sort_by: viral (age-normalised views per subscriber, default) | vsr | views |
         outlier | outlier_adjusted | vph | velocity | engagement | acceleration |
         published
+    preset: "small_channels" (default, the thresholds as passed) or
+        "niche_all" -- every channel of `niche`, ignoring max_subscribers,
+        min_views and min_views_per_subscriber, so big competitors are visible.
+        niche_all requires `niche`.
 
     Each result carries viewsPerSubscriber, an age-adjusted outlier score against
     the channel's own median, and -- once history exists -- vph24h and
@@ -219,7 +224,7 @@ def viral_videos_small_channels(period: str = "7d", period_by: str = "published"
         region=region, category_id=category_id,
         max_channel_video_count=max_channel_video_count,
         exclude_shorts=exclude_shorts, only_shorts=only_shorts,
-        sort_by=sort_by, limit=limit)
+        sort_by=sort_by, limit=limit, preset=preset)
 
 
 @mcp.tool(annotations=ToolAnnotations(

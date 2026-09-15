@@ -217,6 +217,307 @@ def test_video_comments_requires_api_key(monkeypatch):
         raise AssertionError("expected RuntimeError without an API key")
 
 
+# ============================================================================
+# Тулы, которые ходят в YouTube: collect_* / refresh_* / track_channel.
+#
+# Ни один тест ниже не выходит в сеть и не требует ключа -- клиент
+# infrastructure.youtube.client монкипатчится целиком, как в
+# test_video_comments_tool_shapes_raw_comments выше. Проверяем именно функции
+# из interfaces.mcp.server, а не слои под ними: иначе интерфейсный слой
+# остаётся непокрытым.
+#
+# Тесты обязаны быть независимыми от порядка: самодельный раннер внизу файла
+# гоняет их в алфавитном порядке, pytest -- в порядке объявления.
+
+
+def _api_channel(cid, title="Fake Channel", subs=1000, videos=10, views=100000,
+                 uploads="UUfake"):
+    """Ответ channels.list в том виде, в каком его разбирает store_channels."""
+    return {
+        "id": cid,
+        "snippet": {"title": title, "description": "fake channel",
+                    "publishedAt": "2020-01-01T00:00:00Z",
+                    "thumbnails": {"high": {"url": "https://i.ytimg.com/c.jpg"}}},
+        "statistics": {"subscriberCount": str(subs), "videoCount": str(videos),
+                       "viewCount": str(views)},
+        "contentDetails": {"relatedPlaylists": {"uploads": uploads}},
+    }
+
+
+def _no_network(monkeypatch):
+    """Затыкает все пути в сеть, которыми может пойти resolve_channel.
+
+    Без этого опечатка в id канала (CHANNEL_ID_RE ждёт ровно UC + 22 символа)
+    тихо уводит тест в ветку @handle и в живой googleapis.com."""
+    def boom(*a, **k):
+        raise AssertionError("тест ушёл в сеть: незапатченный вызов YouTube API")
+    for name in ("search_videos", "videos_list", "channels_list", "channel_by_handle",
+                 "playlist_items", "most_popular", "video_categories",
+                 "videos_batch_get_stats", "comment_threads"):
+        monkeypatch.setattr(yt, name, boom)
+
+
+def _api_video(vid, cid, title="Fake Video", views=1000,
+               published="2026-01-01T00:00:00Z"):
+    """Ответ videos.list в том виде, в каком его разбирает store_videos."""
+    return {
+        "id": vid,
+        "snippet": {"channelId": cid, "title": title, "description": "fake video",
+                    "publishedAt": published, "tags": ["fake"], "categoryId": "22",
+                    "thumbnails": {"high": {"url": "https://i.ytimg.com/v.jpg"}}},
+        "statistics": {"viewCount": str(views), "likeCount": "10", "commentCount": "2"},
+        "contentDetails": {"duration": "PT10M"},
+        "status": {},
+    }
+
+
+def _count(sql, params=()):
+    conn = db.get_conn()
+    n = conn.execute(sql, params).fetchone()[0]
+    conn.close()
+    return n
+
+
+# --------------------------------------------------- collect_channel
+
+def test_collect_channel_stores_videos_without_spending_search(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCcollectch0000000000001"
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, uploads="UUcollectch")])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: (
+                            [{"video_id": "vcollectch1"}, {"video_id": "vcollectch2"}], 1))
+    monkeypatch.setattr(yt, "videos_list",
+                        lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+
+    out = srv.collect_channel(cid, max_videos=50)
+
+    assert out["channelId"] == cid
+    assert out["videos_found"] == 2
+    assert out["videos_stored"] == 2
+    # весь смысл тула: идём через uploads-плейлист и не трогаем дневной лимит поиска
+    assert out["quota"]["search_calls"] == 0
+
+    conn = db.get_conn()
+    stored = {r["video_id"] for r in conn.execute(
+        "SELECT video_id FROM videos WHERE channel_id=?", (cid,)).fetchall()}
+    conn.close()
+    assert stored == {"vcollectch1", "vcollectch2"}
+
+
+# --------------------------------------------------- collect_niche
+
+def test_collect_niche_spends_one_search_call_per_page(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCcollectniche0000000001"
+    pages_served = []
+
+    def fake_search(k, query, page_token=None, **kw):
+        pages_served.append(page_token)
+        n = len(pages_served)
+        return {"items": [{"id": {"videoId": f"vcollectniche{n}"}}],
+                "nextPageToken": "tok" if n < 2 else None}
+
+    monkeypatch.setattr(yt, "search_videos", fake_search)
+    monkeypatch.setattr(yt, "videos_list",
+                        lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+
+    conn = db.get_conn()
+    before = collector.search_calls_today(conn)
+    conn.close()
+
+    out = srv.collect_niche("fake niche query", label="fake-niche", pages=2)
+
+    conn = db.get_conn()
+    after = collector.search_calls_today(conn)
+    conn.close()
+
+    assert pages_served == [None, "tok"], "вторая страница должна идти по nextPageToken"
+    assert after == before + 2, "каждая страница search.list списывается со счётчика"
+    assert out["niche"] == "fake-niche"
+    assert out["videos_stored"] == 2
+
+
+# --------------------------------------------------- collect_trending
+
+def test_collect_trending_writes_a_ranked_chart_snapshot(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCcollecttrend0000000001"
+    monkeypatch.setattr(yt, "most_popular",
+                        lambda k, region_code="US", video_category_id=None, pages=2:
+                        [_api_video("vtrend1", cid), _api_video("vtrend2", cid)])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+
+    out = srv.collect_trending(regions=["US"], pages=1)
+    snap = out["snapshots"][0]
+    assert snap["videos"] == 2
+    assert snap["snapshotId"]
+
+    conn = db.get_conn()
+    rows = conn.execute(
+        'SELECT video_id, "rank" FROM chart_entries WHERE snapshot_id=? ORDER BY "rank"',
+        (snap["snapshotId"],)).fetchall()
+    conn.close()
+    assert [r["rank"] for r in rows] == [1, 2]
+    assert [r["video_id"] for r in rows] == ["vtrend1", "vtrend2"]
+
+
+# --------------------------------------------------- refresh_stats
+
+def test_refresh_stats_appends_history_instead_of_overwriting(monkeypatch):
+    _no_network(monkeypatch)
+    cid, vid = "UCrefreshstats0000000001", "vrefreshstats1"
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": vid}], 1))
+    monkeypatch.setattr(yt, "videos_list",
+                        lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    srv.collect_channel(cid)
+
+    monkeypatch.setattr(yt, "videos_batch_get_stats",
+                        lambda k, ids, **kw: ([_api_video(vid, cid, views=2222)], []))
+
+    sql = "SELECT COUNT(*) FROM video_stats_history WHERE video_id=?"
+    before = _count(sql, (vid,))
+    srv.refresh_stats(scope="all", limit=5000)
+    once = _count(sql, (vid,))
+    srv.refresh_stats(scope="all", limit=5000)
+    twice = _count(sql, (vid,))
+
+    # Ровно то поведение, на котором стоит idempotentHint=False у refresh_stats:
+    # captured_at ставится в now(), поэтому ON CONFLICT никогда не срабатывает.
+    assert once == before + 1
+    assert twice == once + 1
+
+
+# --------------------------------------------------- refresh_channels
+
+def test_refresh_channels_appends_a_growth_snapshot_each_call(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCrefreshchans0000000001"
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, subs=4242)])
+
+    sql = "SELECT COUNT(*) FROM channel_stats_history WHERE channel_id=?"
+    before = _count(sql, (cid,))
+    out = srv.refresh_channels(channel_ids=[cid])
+    once = _count(sql, (cid,))
+    srv.refresh_channels(channel_ids=[cid])
+    twice = _count(sql, (cid,))
+
+    assert out["refreshed"] == 1
+    assert once == before + 1
+    assert twice == once + 1
+
+
+# --------------------------------------------------- refresh_categories
+
+def test_refresh_categories_upserts_and_does_not_duplicate(monkeypatch):
+    _no_network(monkeypatch)
+    monkeypatch.setattr(yt, "video_categories",
+                        lambda k, region_code="US", hl="en_US":
+                        [{"id": "9999", "title": "Fake Category", "assignable": True}])
+
+    srv.refresh_categories(regions=["ZZ"])
+    srv.refresh_categories(regions=["ZZ"])
+
+    # Единственный из collect/refresh, который идемпотентен: истории нет, только
+    # upsert по (category_id, region).
+    assert _count("SELECT COUNT(*) FROM video_categories "
+                  "WHERE category_id='9999' AND region='ZZ'") == 1
+
+
+# --------------------------------------------------- track / untrack / list
+
+def test_track_then_untrack_keeps_what_was_already_collected(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCtrackflow0000000000001"
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, uploads="UUtrackflow")])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": "vtrackflow1"}], 1))
+    monkeypatch.setattr(yt, "videos_list",
+                        lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+
+    out = srv.track_channel(cid, note="следим")
+    assert out["tracked"] is True
+    assert cid in {c["channel_id"] for c in srv.list_tracked_channels()}
+
+    srv.untrack_channel(cid)
+    assert cid not in {c["channel_id"] for c in srv.list_tracked_channels()}
+
+    # Ровно то, что обещает докстринг untrack_channel и что стоит за
+    # destructiveHint=True: канал уходит из списка, собранное остаётся.
+    assert _count("SELECT COUNT(*) FROM videos WHERE channel_id=?", (cid,)) == 1
+
+
+# --------------------------------------------------- alerts
+
+def test_scan_for_alerts_never_duplicates_and_seen_can_be_cleared():
+    srv.scan_for_alerts()
+    first = _count("SELECT COUNT(*) FROM events")
+    srv.scan_for_alerts()
+    second = _count("SELECT COUNT(*) FROM events")
+    assert second == first, "повторный скан не создаёт дубль по тому же (kind, ref_id)"
+
+    srv.mark_events_seen(all_unseen=True)
+    assert srv.list_events(unseen_only=True, limit=1000) == []
+
+
+# --------------------------------------------------- swipe file
+
+def test_saved_item_roundtrip_and_delete_is_safe_to_repeat():
+    saved = srv.save_item("video", "vswipe1", note="хороший ролик")
+    item_id = saved["id"]
+    assert item_id in {i["id"] for i in srv.list_saved_items(kind="video")}
+
+    srv.delete_saved_item(item_id)
+    assert item_id not in {i["id"] for i in srv.list_saved_items(kind="video")}
+
+    # delete_saved_item несёт destructiveHint=True, но idempotentHint=True:
+    # повторный вызов обязан быть безобидным.
+    srv.delete_saved_item(item_id)
+
+
+# --------------------------------------------------- calibrate_maturity_curve
+
+def test_calibrate_maturity_curve_only_reads():
+    tables = ("videos", "channels", "video_stats_history", "events", "saved_items")
+
+    def snapshot():
+        return {t: _count(f"SELECT COUNT(*) FROM {t}") for t in tables}
+
+    before = snapshot()
+    srv.calibrate_maturity_curve(min_videos=1)
+    # Вопреки названию тул ничего не калибрует в базе -- он считает кривую и
+    # отдаёт её текстом. На этом стоит readOnlyHint=True.
+    assert snapshot() == before
+
+
+# --------------------------------------------------- тонкие делегаты
+
+def test_thin_read_only_tools_answer_on_an_empty_corpus():
+    assert isinstance(srv.list_niches(), list)
+
+    sim = srv.similar_videos("vdoesnotexist")
+    assert sim["similar"] == []
+    assert "hint" in sim, "без эмбеддинга тул обязан объяснить, почему пусто"
+
+    ov = srv.niche_overview_from_channel("UCdoesnotexist0000000001")
+    assert ov["found"] is False
+    assert "hint" in ov
+
+    # data_coverage и title_changes проверялись только на уровне application;
+    # дёргаем и сами тулы, иначе интерфейсный слой остаётся без теста.
+    cov = srv.data_coverage(period="30d")
+    assert "searchCallsToday" in cov
+
+    changes = srv.title_changes(period="7d", limit=5)
+    assert isinstance(changes, dict)
+
+
 if __name__ == "__main__":
     setup_module()
 

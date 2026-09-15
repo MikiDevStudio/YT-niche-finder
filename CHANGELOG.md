@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   YouTube Data API. `collect_*` / `refresh_*` are marked non-idempotent
   because each call appends a new stats snapshot.
 
+- **Tests for the remaining 17 MCP tools** — every tool is now exercised
+  through `interfaces/mcp/server.py` itself rather than the layer beneath it
+  (43/43, up from 26/43), with the YouTube client monkeypatched so nothing
+  needs a key or the network. The new tests pin the behaviour the tool
+  annotations claim: `refresh_stats` / `refresh_channels` append a second
+  history row on a second call, `refresh_categories` upserts instead,
+  `untrack_channel` keeps what was collected, and `calibrate_maturity_curve`
+  writes nothing at all.
+
 ### Fixed
 
 - **`scripts/mcp-docker.sh` больше не полагается на `docker run --env-file`.**

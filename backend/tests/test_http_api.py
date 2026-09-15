@@ -96,6 +96,31 @@ def test_niche_videos_route_returns_points_and_filters_by_channel():
     assert other.json()["videoCount"] == 0
 
 
+def test_overview_viral_counts_by_publication_date():
+    """«Вирусные за 30 дней» — то, что вышло за 30 дней, а не ролики многолетней
+    давности, впервые собранные на этой неделе."""
+    api._rate_hits.clear()
+    body = client.get("/api/overview", params={"period": "30d"}).json()
+    assert body["viral"]["periodBy"] == "published"
+
+
+def test_inspection_and_alerts_accept_the_outlier_base():
+    api._rate_hits.clear()
+    params = {"video_id": "vhttpbig1", "fetch": "false"}
+    video = client.get("/api/inspect/video", params={**params, "outlier_base": "period"}).json()
+    assert video["found"] and video["metrics"]["outlierBase"] == "period"
+    assert "outlierVsPeriod" in video["metrics"]
+
+    batch = client.post("/api/inspect/videos",
+                        json={"ids": ["vhttpbig1"], "fetch": False, "outlier_base": "period"})
+    assert batch.status_code == 200 and batch.json()["results"]["vhttpbig1"]["found"]
+
+    assert client.post("/api/events/scan", params={"outlier_base": "period"}).status_code == 200
+    assert client.post("/api/events/scan", params={"outlier_base": "mean"}).status_code == 400
+    assert client.get("/api/inspect/video",
+                      params={**params, "outlier_base": "mean"}).status_code == 400
+
+
 if __name__ == "__main__":
     setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
@@ -110,3 +135,4 @@ if __name__ == "__main__":
             print(f"  FAIL  {fn.__name__}: {e}")
             traceback.print_exc()
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    sys.exit(1 if failed else 0)  # иначе CI зеленеет при упавших тестах

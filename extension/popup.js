@@ -9,6 +9,7 @@ async function load() {
   $('showBadges').checked = s.showBadges;
   $('onlyOutliers').checked = s.onlyOutliers;
   $('showVph').checked = s.showVph;
+  $('outlierBase').value = s.outlierBase;
   $('dash').href = s.baseUrl;
   checkHealth();
 }
@@ -20,6 +21,7 @@ async function save() {
     showBadges: $('showBadges').checked,
     onlyOutliers: $('onlyOutliers').checked,
     showVph: $('showVph').checked,
+    outlierBase: $('outlierBase').value,
   }});
   $('dash').href = $('baseUrl').value.trim();
   checkHealth();
@@ -139,7 +141,7 @@ async function mdSaveDraft() {
 }
 
 document.addEventListener('DOMContentLoaded', load);
-['baseUrl', 'autoFetch', 'showBadges', 'onlyOutliers', 'showVph'].forEach((id) =>
+['baseUrl', 'autoFetch', 'showBadges', 'onlyOutliers', 'showVph', 'outlierBase'].forEach((id) =>
   document.getElementById(id).addEventListener('change', save));
 document.getElementById('check').addEventListener('click', checkHealth);
 document.getElementById('mdReview').addEventListener('click', mdReview);

@@ -11,6 +11,7 @@ import infrastructure.postgres as db
 from application import discovery as trends
 from application import channel_tracking as T
 from domain import alerts as A
+from domain import metrics as M
 
 DEFAULT_SILENCE_DAYS = A.SILENCE_DAYS_DEFAULT
 DEFAULT_PERIOD = "30d"
@@ -54,18 +55,25 @@ def _latest_snapshot_at(conn, video_ids: list) -> dict:
 
 def scan(outlier_threshold: float = A.OUTLIER_THRESHOLD_DEFAULT,
         acceleration_threshold: float = A.ACCELERATION_THRESHOLD_DEFAULT,
-        silence_days: float = DEFAULT_SILENCE_DAYS, period: str = DEFAULT_PERIOD) -> dict:
+        silence_days: float = DEFAULT_SILENCE_DAYS, period: str = DEFAULT_PERIOD,
+        outlier_base: str = "rolling") -> dict:
     """Run every detector against TRACKED channels only -- alerts are about
     channels you asked to watch, not the whole database. Safe to call every
-    worker cycle: see _emit for why repeats never duplicate."""
+    worker cycle: see _emit for why repeats never duplicate.
+
+    outlier_base picks the baseline behind the outlier detector. A video that
+    already alerted under one base does not alert again under the other --
+    the outlier event dedupes on the bare video id."""
+    outlier_base = M.check_outlier_base(outlier_base)
     tracked = T.list_tracked()
     channel_ids = [c["channel_id"] for c in tracked]
     empty_counts = {"outlier": 0, "acceleration": 0, "title_change": 0, "silence_break": 0}
     if not channel_ids:
         return {"channelsScanned": 0, "videosScanned": 0, "emitted": empty_counts,
+                "outlierBase": outlier_base,
                 "hint": "no tracked channels -- track_channel first"}
 
-    rows = trends.load_window(period=period, channel_ids=channel_ids)
+    rows = trends.load_window(period=period, channel_ids=channel_ids, outlier_base=outlier_base)
     conn = db.get_conn()
 
     snap_at = _latest_snapshot_at(conn, [r["video_id"] for r in rows])
@@ -102,13 +110,16 @@ def scan(outlier_threshold: float = A.OUTLIER_THRESHOLD_DEFAULT,
         "silence_break": A.detect_silence_breaks(channel_uploads, silence_days=silence_days),
     }
     emitted = dict(empty_counts)
+    for ev in candidates["outlier"]:
+        ev["payload"]["outlierBase"] = outlier_base
     for kind, evs in candidates.items():
         for ev in evs:
             if _emit(conn, ev["kind"], ev["refId"], ev["payload"]):
                 emitted[kind] += 1
     conn.commit()
     conn.close()
-    return {"channelsScanned": len(channel_ids), "videosScanned": len(rows), "emitted": emitted}
+    return {"channelsScanned": len(channel_ids), "videosScanned": len(rows),
+            "outlierBase": outlier_base, "emitted": emitted}
 
 
 def _shape_event(r) -> dict:

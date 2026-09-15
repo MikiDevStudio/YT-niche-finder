@@ -95,6 +95,8 @@ services:
       WORKER_FULL_LIMIT: "${WORKER_FULL_LIMIT:-3000}"
       WORKER_REGIONS: "${WORKER_REGIONS:-US}"
       WORKER_TRENDING: "${WORKER_TRENDING:-1}"
+      # baseline for the outlier alert: rolling | period
+      WORKER_ALERTS_OUTLIER_BASE: "${WORKER_ALERTS_OUTLIER_BASE:-rolling}"
       # comma-separated topics kept continuously fresh (1 search call each per day)
       WORKER_QUERIES: "${WORKER_QUERIES:-}"
       WORKER_QUERY_PERIOD: "${WORKER_QUERY_PERIOD:-24h}"

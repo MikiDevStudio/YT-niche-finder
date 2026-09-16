@@ -860,6 +860,38 @@ def tag_stats(niche: str, tag_group: str, outlier_base: str = "rolling",
                              sort_by=sort_by, top_n=top_n)
 
 
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def check_ideas(ideas: list, niche: str = None, period: str = "all",
+                min_similarity: float = 0.55, recent_days: float = 90.0,
+                proven_outlier: float = 2.0, fresh_days: float = 30.0,
+                exclude_shorts: bool = False, outlier_base: str = "rolling",
+                examples: int = 5, match_titles: bool = True) -> dict:
+    """A whole brainstorm list checked against the corpus at once: one verdict
+    per idea, plus the competitor videos it was based on.
+
+    free      nobody covered it -- open
+    recent    covered within recent_days -- skip, that is a head-on collision
+    proven    covered long ago and it broke out (>= proven_outlier) -- demand
+              is proven, saturation is the risk
+    flopped   covered long ago and it did not break out
+
+    Matching is both exact (the phrase in the title, whole words) and semantic
+    (local embeddings, min_similarity); `matchedBy` says which fired, and
+    `corpus.embedded` how much of the corpus the semantic half could see.
+
+    period defaults to "all" on purpose -- the question is whether the idea was
+    EVER covered. Costs zero YouTube quota: local database, local embeddings.
+    """
+    from application import ideas as ideas_mod
+    return ideas_mod.check_ideas(
+        ideas, niche=niche, period=period, min_similarity=min_similarity,
+        recent_days=recent_days, proven_outlier=proven_outlier,
+        fresh_days=fresh_days, exclude_shorts=exclude_shorts,
+        outlier_base=outlier_base, examples=examples, match_titles=match_titles)
+
+
 def run():
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "stdio":

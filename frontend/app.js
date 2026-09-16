@@ -508,6 +508,133 @@ async function viewTopTags() {
     </div>`;
 }
 
+/* ------------------------------------------------------- Проверка идей (#3) */
+
+const IDEA_VERDICT = {
+  free: { label: 'свободно', cls: 'chip-good', note: 'никто не снимал' },
+  recent: { label: 'снято недавно', cls: 'chip-bad', note: 'лобовое столкновение — пропустить' },
+  proven: { label: 'спрос доказан', cls: 'chip-accent', note: 'снимали давно и пробило — риск насыщения' },
+  flopped: { label: 'провалилось', cls: '', note: 'снимали давно и не пробило' },
+};
+
+/* Список переживает уход на другой экран: двадцать идей набирают руками, и
+   терять их при смене периода в шапке было бы враждебно. */
+const ideasDraft = { text: '', res: null };
+
+function ideaVerdictChip(v) {
+  const d = IDEA_VERDICT[v] || { label: v, cls: '' };
+  return `<span class="chip ${d.cls}" data-tip="${esc(d.note || '')}">${esc(d.label)}</span>`;
+}
+
+function ideaVerdictLine(item) {
+  if (!item.matches) return 'ни одного покрытия в базе';
+  const parts = [pl(item.matches, 'покрытие', 'покрытия', 'покрытий')];
+  if (item.daysSinceLastCoverage != null) parts.push(`последнее ${Math.round(item.daysSinceLastCoverage)} дн. назад`);
+  if (item.bestOutlier != null) parts.push(`лучший ${mult(item.bestOutlier)}`);
+  return parts.join(' · ');
+}
+
+function ideaMatchesCard(item) {
+  return `<div class="card">
+    ${sectionHead(item.idea, `${ideaVerdictLine(item)} · показано ${item.videos.length} из ${num(item.matches)}, свежие сверху`)}
+    ${table([
+      { label: 'Видео', wrap: true, render: (v) => `<a href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.title)}</a>` },
+      { label: 'Канал', wrap: true, render: (v) => `<a href="#/channel/${esc(v.channelId)}">${esc(v.channelTitle || v.channelId)}</a>` },
+      { label: 'Опубликовано', render: (v) => `${new Date(v.publishedAt).toLocaleDateString('ru-RU')} <span class="row-sub">${ago(v.publishedAt)}</span>` },
+      { label: 'Просмотры', num: true, render: (v) => num(v.views) },
+      { label: 'Множитель', num: true, render: (v) => mult(v.outlierScore) },
+      { label: 'Нашлось по', render: (v) => (v.matchedBy === 'title' ? 'названию'
+        : v.matchedBy === 'semantic' ? `смыслу · ${v.similarity}` : `названию и смыслу · ${v.similarity}`) },
+    ], item.videos)}
+  </div>`;
+}
+
+function ideasResultBlock(res) {
+  const sub = `${pl(res.corpus.videos, 'ролик', 'ролика', 'роликов')} в корпусе${
+    res.niche ? `, ниша ${res.niche}` : ', вся база'} · «недавно» ${res.thresholds.recentDays} дн.`
+    + ` · пробитие от ${res.thresholds.provenOutlier}x · похожесть от ${res.minSimilarity}`;
+  return `
+    <div class="card">
+      ${sectionHead('Вердикты', sub)}
+      <div class="tiles">
+        ${tile('Свободно', num(res.counts.free), 'никто не снимал')}
+        ${tile('Снято недавно', num(res.counts.recent), 'пропустить')}
+        ${tile('Спрос доказан', num(res.counts.proven), 'снимали давно и пробило')}
+        ${tile('Провалилось', num(res.counts.flopped), 'снимали давно и не пробило')}
+      </div>
+      ${res.hint ? notice(esc(res.hint)) : ''}
+      ${table([
+        { label: 'Идея', wrap: true, render: (r) => esc(r.idea) },
+        { label: 'Вердикт', render: (r) => ideaVerdictChip(r.verdict) },
+        { label: 'Покрытий', num: true, render: (r) => num(r.matches) },
+        { label: 'Дней с последнего', num: true, render: (r) => (r.daysSinceLastCoverage != null ? Math.round(r.daysSinceLastCoverage) : '—') },
+        { label: 'Лучший множитель', num: true, render: (r) => (r.bestOutlier != null ? mult(r.bestOutlier) : '—') },
+        { label: 'Медиана просмотров', num: true, render: (r) => (r.medianViews != null ? compact(r.medianViews) : '—') },
+      ], res.ideas)}
+    </div>
+    ${res.ideas.filter((r) => r.videos.length).map(ideaMatchesCard).join('')}`;
+}
+
+async function viewIdeas() {
+  view.innerHTML = `
+    <div class="card">
+      ${sectionHead('Проверка идей',
+    'список тем — вердикт по каждой: снимали ли это конкуренты и чем кончилось · '
+    + 'ищем по всей базе, период из шапки тут не применяется — вопрос в том, снимали ли это когда-нибудь')}
+      <div class="form-row">
+        <label class="field" style="flex:2 1 320px"><span class="field-label">Идеи, по одной в строке</span>
+          <textarea id="ideaList" rows="7" placeholder="автомойка&#10;похоронное бюро&#10;прачечная самообслуживания">${esc(ideasDraft.text)}</textarea></label>
+        <label class="field"><span class="field-label">«Недавно» — дней</span>
+          <input type="number" id="ideaRecent" value="90" min="1" step="1"></label>
+        <label class="field"><span class="field-label">Пробитие от</span>
+          <input type="number" id="ideaProven" value="2" min="0" step="0.1"></label>
+        <label class="field"><span class="field-label">Похожесть от</span>
+          <input type="number" id="ideaSim" value="0.55" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="form-row" style="margin-top:12px">
+        <button class="btn" id="ideaRun" type="button">Проверить</button>
+        <span class="section-sub">${state.niche ? `ниша: ${esc(state.niche)}` : 'ниша не выбрана — ищем по всей базе'} · квоту YouTube не тратит</span>
+      </div>
+    </div>
+    <div id="ideaResults">${ideasDraft.res ? ideasResultBlock(ideasDraft.res) : ''}</div>`;
+
+  const run = async () => {
+    const text = $('#ideaList').value;
+    const ideas = text.split('\n').map((l) => l.trim()).filter(Boolean);
+    ideasDraft.text = text;
+    if (!ideas.length) { toast('Впишите хотя бы одну идею', 'err'); return; }
+    const btn = $('#ideaRun');
+    btn.disabled = true;
+    $('#ideaResults').innerHTML = '<div class="card"><div class="skeleton-page"></div></div>';
+    try {
+      const res = await api('/api/ideas/check', {
+        method: 'POST',
+        body: {
+          ideas,
+          niche: state.niche || null,
+          outlier_base: state.outlierBase,
+          recent_days: Number($('#ideaRecent').value) || 90,
+          proven_outlier: Number($('#ideaProven').value) || 2,
+          min_similarity: Number($('#ideaSim').value) || 0.55,
+        },
+      });
+      ideasDraft.res = res;
+      $('#ideaResults').innerHTML = ideasResultBlock(res);
+    } catch (e) {
+      ideasDraft.res = null;
+      $('#ideaResults').innerHTML = `<div class="card">${notice(esc(e.message), 'error')}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  $('#ideaRun').addEventListener('click', run);
+  // Ctrl+Enter, потому что Enter внутри textarea — это новая идея, а не отправка.
+  $('#ideaList').addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
+  });
+}
+
 /* ----------------------------------------------------------------- Трекер */
 
 async function viewTracker() {
@@ -1665,6 +1792,7 @@ const ROUTES = {
   tracker: { title: 'Трекер каналов', run: viewTracker },
   saved: { title: 'Избранное', run: viewSaved },
   metadata: { title: 'Разбор метаданных', run: viewMetadata },
+  ideas: { title: 'Проверка идей', run: viewIdeas },
   niches: { title: 'Ниши', run: viewNiches },
   data: { title: 'Данные', run: viewData },
   help: { title: 'Справка и FAQ', run: viewHelp },

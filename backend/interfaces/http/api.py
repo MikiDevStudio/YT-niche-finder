@@ -35,6 +35,7 @@ from application import inspection as I
 from application import library as L
 from application import metadata_review as MR
 from application import alerts as AL
+from application import tagging as TAG
 from domain import metrics as M
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
@@ -323,6 +324,52 @@ def niche_videos(slug: str, period: str = "all", channels: str = None,
                           exclude_shorts=exclude_shorts,
                           outlier_base=_outlier_base(outlier_base),
                           outlier_threshold=outlier_threshold)
+
+
+# ------------------------------------------------- теги тем на роликах (#2)
+
+@app.get("/api/niches/{slug}/tags")
+def niche_tags(slug: str, group: str = None):
+    """Все теги ниши одним запросом: из него дашборд строит и селектор групп,
+    и чипы, и карту ролик -> теги."""
+    return TAG.list_video_tags(niche=slug, tag_group=group)
+
+
+@app.get("/api/niches/{slug}/tag-stats")
+def niche_tag_stats(slug: str, group: str, period: str = "all",
+                    outlier_base: str = "rolling", outlier_threshold: float = 2.0,
+                    include_fresh: bool = False, min_videos: int = 1,
+                    sort_by: str = "hit_rate"):
+    return TAG.tag_stats(niche=slug, tag_group=group, period=period,
+                         outlier_base=_outlier_base(outlier_base),
+                         outlier_threshold=outlier_threshold,
+                         include_fresh=include_fresh, min_videos=min_videos,
+                         sort_by=sort_by)
+
+
+@app.get("/api/videos/{video_id}/tags")
+def video_tags(video_id: str):
+    return TAG.list_video_tags(video_id=video_id)
+
+
+@app.post("/api/tags")
+def write_tags(payload: dict = Body(...)):
+    """Правка руками из дашборда, поэтому source жёстко 'manual': авторазметке
+    (#7) запрещено перезаписывать такие строки, и подменять их источник через
+    открытый эндпоинт нельзя."""
+    try:
+        return TAG.tag_videos(payload.get("items"), source="manual",
+                              replace=bool(payload.get("replace")))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/videos/{video_id}/tags/{group}/{tag}")
+def delete_video_tag(video_id: str, group: str, tag: str):
+    try:
+        return TAG.untag_videos([{"video_id": video_id, "tag_group": group, "tag": tag}])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/channels/tracked")

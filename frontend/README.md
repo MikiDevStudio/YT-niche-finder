@@ -112,6 +112,36 @@ query), with video counts and the last collection time for each niche.
 
 ![Niches](../assets/niches.jpg)
 
+Clicking a niche opens its own screen: every video as a point on a
+date x views scatter (log scale), the channels of the niche as colour, and
+the outliers as a table underneath.
+
+#### Topic tags on that screen
+
+"Colour by" switches the scatter from channels to one of your own tag groups
+(see `tag_videos` in [backend/README.md](../backend/README.md#topic-tags-and-their-hit-rate)).
+Three most frequent tags of the group get a colour, the rest are grey, and
+untagged videos are a faint grey of their own — there is no fourth colour
+that survives colour blindness, so the difference is named in the legend
+rather than painted. A video carrying several tags of the group (three
+triggers is normal) is coloured by its most frequent one; to pull those
+apart, switch the tag chips next to the selector off and on.
+
+Under the scatter, the hit rate of every tag of the group: the share of its
+videos that are outliers, the lift against the niche's own share, and the
+median views. Tags with fewer than five videos are marked "выборка мала"
+instead of being hidden. These numbers are always computed over the whole
+niche, not over the period picked in the header — a hit rate is a property
+of the taxonomy, and a 30-day window would cut out exactly the videos the
+tag is judged by. Videos younger than 30 days sit out of both sides of the
+fraction anyway; the subtitle says how many that was.
+
+The "Разметка" card lists the same videos with their tags as chips: "×"
+removes a tag, "+" adds one, and "только без тега" shows what is still
+unlabelled. Edits from here are written with `source=manual`, which the
+automatic tagger is not allowed to overwrite. Tagging hundreds of videos at
+once is a job for the `tag_videos` MCP tool, not for this table.
+
 ### Channel
 
 A detailed breakdown of one channel: subscribers, views, median per video,

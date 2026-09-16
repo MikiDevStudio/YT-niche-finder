@@ -773,6 +773,112 @@ def test_viral_niche_all_preset_requires_a_niche():
             raise AssertionError(f"expected ValueError for {kwargs}")
 
 
+# --------------------------------------------------- теги тем и хит-рейт (#2)
+
+def _seed_tag_niche(monkeypatch):
+    """Канал с понятной историей: три ролика по 1000, один хит на 9000, один
+    провал и один свежий. Хит-рейт тега потом считается по этим числам."""
+    from datetime import datetime, timedelta, timezone
+    _no_network(monkeypatch)
+    cid = "UC" + "tagniche".ljust(22, "0")
+    now = datetime.now(timezone.utc)
+    uploads = {"vtag_old1": (1000, 90), "vtag_old2": (1000, 80), "vtag_old3": (1000, 70),
+               "vtag_hit": (9000, 60), "vtag_flop": (200, 50), "vtag_fresh": (500, 5)}
+
+    def video(vid):
+        views, days = uploads[vid]
+        published = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _api_video(vid, cid, views=views, published=published)
+
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": v} for v in uploads], 1))
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [video(v) for v in ids])
+    srv.collect_channel(cid, niche="tag-niche")
+    return cid
+
+
+def test_tag_tools_roundtrip_and_hit_rate(monkeypatch):
+    _seed_tag_niche(monkeypatch)
+    group = "topic_group_tag"
+
+    written = srv.tag_videos([
+        {"video_id": "vtag_hit", "tag_group": group, "tag": "A"},
+        {"video_id": "vtag_old1", "tag_group": group, "tag": "a"},
+        {"video_id": "vtag_flop", "tag_group": group, "tag": "b"},
+        {"video_id": "vtag_fresh", "tag_group": group, "tag": "a"},
+    ])
+    assert written["written"] == 4 and written["quota"] == 0
+    assert srv.tag_videos([{"video_id": "vtag_hit", "tag_group": group,
+                            "tag": "a"}])["written"] == 1      # идемпотентно
+
+    listed = srv.list_video_tags(niche="tag-niche", tag_group=group)
+    assert listed["count"] == 4
+    assert listed["groups"][0]["tags"][0] == {"tag": "a", "videos": 3}
+
+    stats = srv.tag_stats(niche="tag-niche", tag_group=group)
+    # свежий ролик не попадает ни в числитель, ни в знаменатель
+    assert stats["freshExcluded"] == 1 and stats["videos"] == 5
+    assert stats["hits"] == 1                                   # только vtag_hit (9x)
+    by_tag = {t["tag"]: t for t in stats["tags"]}
+    assert by_tag["a"]["videos"] == 2 and by_tag["a"]["hits"] == 1
+    assert by_tag["a"]["hitRate"] == 0.5
+    assert by_tag["a"]["lift"] == round(0.5 / (1 / 5), 2)       # 2.5
+    assert by_tag["b"]["hits"] == 0
+    assert by_tag["a"]["examples"][0]["videoId"] == "vtag_hit"
+
+    with_fresh = srv.tag_stats(niche="tag-niche", tag_group=group, include_fresh=True)
+    assert with_fresh["videos"] == 6 and with_fresh["freshExcluded"] == 0
+
+    assert srv.untag_videos([{"video_id": "vtag_flop", "tag_group": group,
+                              "tag": "b"}])["removed"] == 1
+    assert srv.list_video_tags(video_id="vtag_flop")["count"] == 0
+
+
+def test_tag_stats_hints_instead_of_silently_returning_nothing(monkeypatch):
+    _seed_tag_niche(monkeypatch)
+    empty = srv.tag_stats(niche="tag-niche", tag_group="topic_group_typo")
+    assert empty["tags"] == [] and empty["hint"]
+    assert srv.tag_stats(niche="no-such-niche", tag_group="g")["hint"]
+
+
+def test_tag_replace_and_source_protection(monkeypatch):
+    """Postgres-версия того, что test_tagging.py проверяет на sqlite: replace
+    чистит только свою группу, а llm не перетирает ручную разметку."""
+    _seed_tag_niche(monkeypatch)
+    group = "topic_group_replace"
+    srv.tag_videos([{"video_id": "vtag_hit", "tag_group": group, "tag": "a"},
+                    {"video_id": "vtag_hit", "tag_group": "trigger", "tag": "curiosity"}],
+                   source="manual")
+
+    moved = srv.tag_videos([{"video_id": "vtag_hit", "tag_group": group, "tag": "b"}],
+                           replace=True)
+    assert moved["removed"] == 1
+    assert {t["tag"] for t in srv.list_video_tags(video_id="vtag_hit",
+                                                  tag_group=group)["items"]} == {"b"}
+    assert srv.list_video_tags(video_id="vtag_hit", tag_group="trigger")["count"] == 1
+
+    srv.tag_videos([{"video_id": "vtag_old1", "tag_group": group, "tag": "c"}],
+                   source="manual")
+    auto = srv.tag_videos([{"video_id": "vtag_old1", "tag_group": group, "tag": "c"},
+                           {"video_id": "vtag_old2", "tag_group": group, "tag": "c"}],
+                          source="llm")
+    assert auto["written"] == 1 and auto["skipped"] == 1
+    sources = {i["videoId"]: i["source"]
+               for i in srv.list_video_tags(tag_group=group)["items"]}
+    assert sources["vtag_old1"] == "manual" and sources["vtag_old2"] == "llm"
+
+    for bad in ({"source": "banana"}, {"items": []}):
+        try:
+            srv.tag_videos(bad.get("items", [{"video_id": "v", "tag_group": "g",
+                                              "tag": "t"}]),
+                           **{k: v for k, v in bad.items() if k != "items"})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad}")
+
+
 if __name__ == "__main__":
     setup_module()
 

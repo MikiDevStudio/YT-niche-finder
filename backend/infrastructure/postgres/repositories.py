@@ -188,3 +188,93 @@ def upsert_category(conn, category_id, region, title, assignable):
         "title=excluded.title, assignable=excluded.assignable, updated_at=excluded.updated_at",
         (str(category_id), region, title, 1 if assignable else 0, now_iso()),
     )
+
+
+# ------------------------------------------------ topic tags (issue #2)
+#
+# `protect_sources` is what keeps automatic tagging from overwriting human
+# work: the writer names the sources it must not touch, and both the replace
+# sweep and the upsert skip rows that carry them. The auto-tagger of #7 passes
+# ("manual", "claude-mcp"); a human passes nothing and wins over everything.
+
+def _tag_keys(items):
+    return [(i["video_id"], i["tag_group"], i["tag"]) for i in items]
+
+
+def upsert_video_tags(conn, items, source: str, replace: bool = False,
+                      protect_sources=()) -> dict:
+    """Write {video_id, tag_group, tag} rows. Returns counts, never raises on
+    a tag that is already there -- the same call twice changes nothing.
+
+    replace=True first drops the other tags of the touched (video, group)
+    pairs, so re-tagging a video from group A to group B does not leave it in
+    both. It only sweeps the groups actually present in `items`.
+    """
+    if not items:
+        return {"written": 0, "removed": 0, "skipped": 0}
+    now = now_iso()
+    removed = 0
+
+    if replace:
+        keep = {}
+        for video_id, group, tag in _tag_keys(items):
+            keep.setdefault((video_id, group), set()).add(tag)
+        for (video_id, group), tags in keep.items():
+            sql = ("DELETE FROM video_tags WHERE video_id=? AND tag_group=? "
+                   f"AND tag NOT IN ({','.join('?' * len(tags))})")
+            params = [video_id, group, *sorted(tags)]
+            if protect_sources:
+                sql += f" AND source NOT IN ({','.join('?' * len(protect_sources))})"
+                params += list(protect_sources)
+            removed += conn.execute(sql, params).rowcount
+
+    sql = ("INSERT INTO video_tags (video_id, tag_group, tag, source, created_at) "
+           "VALUES (?,?,?,?,?) ON CONFLICT (video_id, tag_group, tag) DO UPDATE SET "
+           "source=excluded.source")
+    if protect_sources:
+        sql += f" WHERE video_tags.source NOT IN ({','.join('?' * len(protect_sources))})"
+    written = skipped = 0
+    for video_id, group, tag in _tag_keys(items):
+        params = [video_id, group, tag, source, now]
+        if protect_sources:
+            params += list(protect_sources)
+        if conn.execute(sql, params).rowcount:
+            written += 1
+        else:
+            skipped += 1
+    return {"written": written, "removed": removed, "skipped": skipped}
+
+
+def delete_video_tags(conn, items) -> dict:
+    """Remove the listed {video_id, tag_group, tag} rows."""
+    removed = 0
+    for video_id, group, tag in _tag_keys(items):
+        removed += conn.execute(
+            "DELETE FROM video_tags WHERE video_id=? AND tag_group=? AND tag=?",
+            (video_id, group, tag),
+        ).rowcount
+    return {"removed": removed}
+
+
+def video_tags_for(conn, video_ids=None, niche: str = None, tag_group: str = None):
+    """Tag rows for a set of videos, a whole niche, or one group of either."""
+    sql = ("SELECT t.video_id, t.tag_group, t.tag, t.source, t.created_at "
+           "FROM video_tags t")
+    where, params = [], []
+    if niche:
+        sql += " JOIN video_niches vn ON vn.video_id = t.video_id"
+        where.append("vn.niche_slug = ?")
+        params.append(niche)
+    if video_ids is not None:
+        ids = list(video_ids)
+        if not ids:
+            return []
+        where.append(f"t.video_id IN ({','.join('?' * len(ids))})")
+        params += ids
+    if tag_group:
+        where.append("t.tag_group = ?")
+        params.append(tag_group)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY t.video_id, t.tag_group, t.tag"
+    return conn.execute(sql, params).fetchall()

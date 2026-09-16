@@ -149,6 +149,43 @@ def test_track_route_resolves_a_handle_to_the_channel_id():
     assert cid not in {r["channel_id"] for r in client.get("/api/channels/tracked").json()["channels"]}
 
 
+def test_tag_routes_write_read_and_delete():
+    """Дашборд правит теги руками, поэтому POST жёстко пишет source=manual."""
+    api._rate_hits.clear()
+    group = "topic_group_http"
+
+    created = client.post("/api/tags", json={"items": [
+        {"videoId": "vhttpbig1", "group": group, "tag": "A"}]})
+    assert created.status_code == 200
+    assert created.json()["written"] == 1 and created.json()["source"] == "manual"
+
+    tags = client.get(f"/api/niches/{NICHE}/tags").json()
+    assert tags["count"] == 1
+    assert tags["items"][0] == {"videoId": "vhttpbig1", "group": group, "tag": "a",
+                               "source": "manual",
+                               "createdAt": tags["items"][0]["createdAt"]}
+    assert client.get(f"/api/videos/vhttpbig1/tags").json()["count"] == 1
+    assert client.get(f"/api/niches/{NICHE}/tags", params={"group": "nope"}).json()["count"] == 0
+
+    stats = client.get(f"/api/niches/{NICHE}/tag-stats", params={"group": group})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["group"] == group and body["tags"][0]["tag"] == "a"
+    assert body["tags"][0]["videos"] == 1
+
+    assert client.delete(f"/api/videos/vhttpbig1/tags/{group}/a").json()["removed"] == 1
+    assert client.get(f"/api/videos/vhttpbig1/tags").json()["count"] == 0
+
+
+def test_tag_routes_reject_bad_input_with_400():
+    api._rate_hits.clear()
+    assert client.post("/api/tags", json={"items": []}).status_code == 400
+    assert client.post("/api/tags", json={"items": [{"tag": "a"}]}).status_code == 400
+    bad_base = client.get(f"/api/niches/{NICHE}/tag-stats",
+                          params={"group": "g", "outlier_base": "mean"})
+    assert bad_base.status_code == 400
+
+
 if __name__ == "__main__":
     setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

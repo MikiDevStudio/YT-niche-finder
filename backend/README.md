@@ -5,7 +5,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](Dockerfile)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](interfaces/http/api.py)
 [![PostgreSQL 16](https://img.shields.io/badge/postgres-16-336791?style=flat-square&logo=postgresql&logoColor=white)](../docker-compose.yml)
-[![MCP](https://img.shields.io/badge/MCP-29%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
+[![MCP](https://img.shields.io/badge/MCP-48%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
 
 A self-hosted alternative to NexLev / vidIQ / ViewStats: find niches, viral
 videos from small channels, trending categories and keywords **over
@@ -298,6 +298,38 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | `title_patterns` | which title phrases correlate with breakouts |
 | `calibrate_maturity_curve` | recompute the maturity curve from your own data |
 
+### Topic tags and their hit rate
+
+Your own taxonomy on top of the corpus — not `videos.tags` (those are what
+the creator typed on YouTube), but what the breakdown of a niche concluded:
+which topic group a video belongs to, which triggers it pulls. Tagging turns
+that breakdown from a chat message into data you can rank.
+
+| Tool | What it does |
+|---|---|
+| `tag_videos` | put `{video_id, tag_group, tag}` triples on videos; `replace=True` for groups where only one tag may stand |
+| `untag_videos` | remove those same triples |
+| `list_video_tags` | what is tagged already, by niche / video / group, with per-tag video counts |
+| `tag_stats` | per tag: `hitRate` (share of its videos that are outliers), `lift` against the niche's own rate, median views, examples |
+
+```
+tag_videos(items=[{"video_id": "abc", "tag_group": "topic_group_econ", "tag": "a"}])
+tag_stats(niche="econ", tag_group="topic_group_econ")
+```
+
+A group may hold several tags per video — three triggers is the normal case.
+Single-valued groups ("A or B, never both") are enforced by `replace=True`
+at write time, not by the schema.
+
+`source` separates who wrote a tag: `manual` (dashboard), `claude-mcp`
+(a conversation), `llm` (automatic tagging). Automatic tagging may add, never
+overwrite the first two.
+
+Videos younger than 30 days sit out of both sides of the hit-rate fraction by
+default: their views are still coming in, so counting them makes a freshly
+explored topic look like a flop. `include_fresh=True` puts them back, and
+`freshExcluded` says how many that was either way.
+
 ---
 
 ## How to use this
@@ -450,12 +482,13 @@ analytic/
     │   ├── metrics.py          every formula (outlier, VPH, revenue, ...)
     │   ├── periods.py          parsing 24h / 7d / 30d / all
     │   ├── keywords.py         n-grams, momentum, lift
+    │   ├── tag_stats.py        hit rate and lift of a topic tag
     │   ├── scoring.py          backward compatibility (see metrics.py)
     │   └── categories_catalog.py  pure YouTube categories + offline fallback
     │
     ├── infrastructure/     adapters to the outside world
     │   ├── postgres/           connection.py, schema.py, repositories.py
-    │   │                       (Postgres schema v2, sqlite3-compatible shim)
+    │   │                       (Postgres schema v4, sqlite3-compatible shim)
     │   ├── youtube/client.py   wrapper around YouTube Data API v3 + quota model
     │   ├── embeddings/fastembed_provider.py  local multilingual embeddings
     │   └── categories/repository.py          categories, cached in Postgres + YouTube API
@@ -465,10 +498,11 @@ analytic/
     │   ├── discovery.py        the three period-based sections (was trends.py)
     │   ├── channel_tracking.py channel tracking and analysis (was tracking.py)
     │   ├── search.py           outlier search and niche overview (was query.py)
+    │   ├── tagging.py          topic tags on videos and their hit rate
     │   └── worker_cycle.py     the background collector's loop (was worker.py)
     │
     ├── interfaces/         thin adapters facing outward
-    │   ├── mcp/server.py       MCP server, 29 tools
+    │   ├── mcp/server.py       MCP server, 48 tools
     │   ├── http/api.py         HTTP API for the dashboard (FastAPI)
     │   ├── cli/cli.py          same, from the terminal, plus doctor (diagnostics)
     │   └── worker/main.py      background collector's entry point

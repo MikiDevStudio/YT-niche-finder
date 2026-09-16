@@ -794,6 +794,72 @@ def mark_events_seen(ids: list = None, all_unseen: bool = False) -> dict:
     return alerts_mod.mark_seen(ids=ids, all_unseen=all_unseen)
 
 
+# ------------------------------------------------------ topic tags (issue #2)
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def tag_videos(items: list, source: str = "claude-mcp", replace: bool = False) -> dict:
+    """Put your own topic tags on videos -- the way a niche breakdown becomes
+    data instead of a chat message. Zero quota, local only.
+
+    items: [{"video_id": "abc", "tag_group": "topic_group_economics", "tag": "a"}].
+    A group may hold several tags per video (three triggers is normal); pass
+    replace=True for groups where only one tag may stand, so re-tagging A to B
+    does not leave the video in both. Groups and tags are lowercased.
+
+    Then ask tag_stats which of those tags actually break out.
+    """
+    from application import tagging
+    return tagging.tag_videos(items, source=source, replace=replace)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=True,
+    idempotent_hint=True, open_world_hint=False))
+def untag_videos(items: list) -> dict:
+    """Remove tags: same {video_id, tag_group, tag} items as tag_videos.
+    Only the tag rows go, never the videos or their history."""
+    from application import tagging
+    return tagging.untag_videos(items)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def list_video_tags(niche: str = None, video_id: str = None,
+                    tag_group: str = None) -> dict:
+    """What is tagged already: every tag of a niche, of one video, or of one
+    group, plus how many videos each tag covers. Call it before tagging to
+    reuse the existing group names instead of inventing a second spelling."""
+    from application import tagging
+    return tagging.list_video_tags(niche=niche, video_id=video_id, tag_group=tag_group)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def tag_stats(niche: str, tag_group: str, outlier_base: str = "rolling",
+              outlier_threshold: float = 2.0, period: str = "all",
+              include_fresh: bool = False, min_videos: int = 1,
+              sort_by: str = "hit_rate", top_n: int = 100) -> dict:
+    """Hit rate per tag: how often videos carrying it break out (outlier >=
+    outlier_threshold), and the lift against the same share across the niche.
+    lift 2.0 means the tag doubles the odds of a breakout.
+
+    Videos younger than 30 days are excluded from both sides of the fraction
+    by default -- their views are still coming in, so counting them makes a
+    freshly explored topic look like a flop. `freshExcluded` reports how many.
+    outlier_base: "rolling" (default) or "period", see search_outliers.
+    sort_by: hit_rate | lift | videos | median_views | median_outlier."""
+    from application import tagging
+    return tagging.tag_stats(niche=niche, tag_group=tag_group,
+                             outlier_base=outlier_base,
+                             outlier_threshold=outlier_threshold, period=period,
+                             include_fresh=include_fresh, min_videos=min_videos,
+                             sort_by=sort_by, top_n=top_n)
+
+
 def run():
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "stdio":

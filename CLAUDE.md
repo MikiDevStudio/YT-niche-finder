@@ -21,6 +21,10 @@ Feature work is tracked as issues in this fork.
 - Run the tests the way CI does, one process per file (`.github/workflows/ci.yml`); `make up-db` first.
   There is no host venv, so run them in the image:
   `docker run --rm --network niche-finder_default -e POSTGRES_HOST=postgres -v "$PWD/backend:/app" niche-finder:latest python tests/test_smoke.py`
+  From Git Bash, prefix it with `export MSYS_NO_PATHCONV=1` first: MSYS rewrites the container-side `/app`
+  into a Windows path, and the run fails with `can't open file 'C:/Program Files/Git/app/tests/...'`.
+  Do not add `--env-file .env` to that command either -- it carries the host-only `NICHE_DATABASE_URL`
+  (`localhost:5434`), which wins over `POSTGRES_HOST` and leaves the container dialling itself.
 - Review `git diff` for unintended changes; mention affected MCP tools / endpoints in the PR.
 - Work on a branch, open a PR against `main` of this fork, reference the issue.
 - `gh` in this clone resolves to the upstream `pandich93/niche-finder`; pass
@@ -34,5 +38,8 @@ Feature work is tracked as issues in this fork.
 - `web` and `worker` mount `./backend` live and their HEALTHCHECK runs `db.init_db()` every 5 minutes, so a
   schema migration written on a branch reaches the real local database before it is even committed. Stop those
   containers while a migration must not run yet, and check what it did afterwards.
+- Live-mounted is not live-reloaded: uvicorn in `web` runs without `--reload`, so a new HTTP route answers 404
+  until `docker compose restart web`. The frontend needs no restart -- its files are served from disk, a browser
+  reload is enough.
 - A dashboard crawling on every screen has been Docker Desktop, not this code: when its engine answers
   `500 Internal Server Error` to `docker version`, restart Docker Desktop before profiling anything.

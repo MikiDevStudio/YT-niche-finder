@@ -5,7 +5,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](Dockerfile)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](interfaces/http/api.py)
 [![PostgreSQL 16](https://img.shields.io/badge/postgres-16-336791?style=flat-square&logo=postgresql&logoColor=white)](../docker-compose.yml)
-[![MCP](https://img.shields.io/badge/MCP-48%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
+[![MCP](https://img.shields.io/badge/MCP-49%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
 
 A self-hosted alternative to NexLev / vidIQ / ViewStats: find niches, viral
 videos from small channels, trending categories and keywords **over
@@ -163,6 +163,7 @@ make cli ARGS="viral --period 24h --period-by discovered"
 make cli ARGS="categories --period 7d --rank-by channels"
 make cli ARGS="keywords --period 24h"
 make cli ARGS="channels --period 24h"             # outlier channels
+make cli ARGS="export-niche brain --out brain.tsv"   # the niche as a TSV table
 make cli ARGS="seed"                              # synthetic data, just to look around
 ```
 
@@ -298,6 +299,94 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | `title_patterns` | which title phrases correlate with breakouts |
 | `calibrate_maturity_curve` | recompute the maturity curve from your own data |
 
+### Tagging new videos automatically
+
+Once a taxonomy has settled on hand-tagged videos, the worker can keep it
+applied to what arrives afterwards, through OpenRouter. Off by default --
+this is the only thing in the project that costs money.
+
+```bash
+make cli ARGS="autotag econ --dry-run"          # ask, write nothing
+make cli ARGS="autotag econ --group topic_group_econ --limit 50"
+```
+
+```
+OPENROUTER_API_KEY=...
+LLM_MODEL=z-ai/glm-5.3-flash
+LLM_TAGGING=1
+LLM_TAGGING_NICHES=econ,brain
+LLM_TAGGING_MAX_COST_USD=0.25
+```
+
+Three properties make it safe to leave running:
+
+* **the taxonomy is closed.** The group's existing tags go into the request as
+  a JSON-schema enum and into the prompt as a list, together with a few
+  examples of how a human used them. A tag that is not in that list is dropped
+  here even if the model returns it, so automatic tagging can never split a
+  group into synonyms.
+* **it adds, never overwrites.** Rows are written with `source="llm"`, which
+  `PROTECTED_BY` in `application/tagging.py` forbids from replacing `manual` or
+  `claude-mcp`. A group with fewer than five hand-tagged videos is skipped
+  entirely: with nothing to imitate there is nothing to automate.
+* **it is bounded.** `limit` videos per run, newest first, in batches, and it
+  stops at `LLM_TAGGING_MAX_COST_USD`. Every run reports tokens and dollars,
+  and the worker logs one line per niche with the cost.
+
+Two things worth knowing before pointing this at another model:
+
+* **the model id must be exactly what OpenRouter's catalogue says**
+  (`https://openrouter.ai/api/v1/models`). A near-miss is a 400, not a
+  fallback.
+* **a declared JSON schema is a strong hint, not a guarantee.** Support is per
+  provider, not per model; requests here carry `strict: true` and
+  `provider.require_parameters`, and `z-ai/glm-5.3-flash` still answered inside
+  a ```json fence with a shape of its own. Both are handled, and everything is
+  re-validated locally.
+* **a reasoning model bills for thinking.** On `z-ai/glm-5.3-flash`,
+  classifying two videos cost 153 reasoning tokens by default and 27 with
+  `reasoning.effort="low"`, which is what the tagger sends. `"none"` is
+  rejected outright -- reasoning is mandatory on that endpoint. Tagging 20
+  videos measured $0.00037, so a 227-video niche is well under a cent.
+
+### Checking a list of ideas
+
+A brainstorm is a column of nouns, and every one of them asks the same
+question: did a competitor already make this video, and did it work?
+`check_ideas` answers the whole column in one pass over the corpus.
+
+| Tool | What it does |
+|---|---|
+| `check_ideas` | one verdict per idea, plus the competitor videos behind it |
+
+```
+check_ideas(ideas=["car wash", "funeral home", "laundromat"], niche="econ")
+```
+
+| Verdict | Means |
+|---|---|
+| `free` | nobody in the corpus covered it |
+| `recent` | covered within `recent_days` (90 by default) -- a head-on collision, skip it |
+| `proven` | covered long ago and it broke out (>= `proven_outlier`) -- demand is proven, saturation is the risk |
+| `flopped` | covered long ago and it did not break out |
+
+`recent` is checked before performance on purpose: a video from last month
+competes with yours whether it flopped or not, and its own numbers are not
+final yet. Performance is judged only on videos older than `fresh_days`, the
+same rule the tag hit rate uses.
+
+An idea matches a video two ways, and `matchedBy` says which fired: the phrase
+in the title (whole words, punctuation and case ignored) or cosine over the
+local embeddings (`min_similarity`, 0.55 by default). Short phrases score low
+semantically -- "oil rig" against "The Economics of Owning an Offshore Oil
+Rig" sits around 0.5 -- so the title half is what usually catches them, and
+`corpus.embedded` reports how much of the corpus the semantic half could even
+see. The thresholds are all parameters; every number a verdict was made on
+comes back with it.
+
+Zero quota, local database and local embeddings only. The dashboard has the
+same thing under "Проверка идей": a textarea and a table of verdicts.
+
 ### Topic tags and their hit rate
 
 Your own taxonomy on top of the corpus — not `videos.tags` (those are what
@@ -329,6 +418,35 @@ Videos younger than 30 days sit out of both sides of the hit-rate fraction by
 default: their views are still coming in, so counting them makes a freshly
 explored topic look like a flop. `include_fresh=True` puts them back, and
 `freshExcluded` says how many that was either way.
+
+### Exporting a niche
+
+The corpus of one niche as a table, for the research notes in YT-analyze
+(`niches/<niche>/data/`): one row per video, with the channel it came from,
+both outlier baselines and whatever topic tags it carries.
+
+```bash
+make cli ARGS="export-niche brain"                  # videos_YYYY-MM-DD.tsv here
+make cli ARGS="export-niche brain --out brain.tsv"
+make cli ARGS="export-niche brain --out -"          # to stdout, to pipe onwards
+curl -OJ 'http://localhost:8080/api/niches/brain/export.tsv'
+```
+
+Columns: `channel, handle, subs, video_id, published_at, views, likes,
+comments, length_seconds, is_short, title, outlierScoreRolling,
+outlierScorePeriod, tags`. Appended to, never reordered -- a parser on the
+other side depends on it. Tags of one video share a cell, as
+`group=tag1,tag2; other=tag3`, so a moving taxonomy does not change the
+shape of the file.
+
+TSV rather than CSV: titles are full of commas and quotes, and TSV needs no
+quoting rules for those. Tabs and newlines inside a field are turned into
+spaces, so a split on tabs always yields the same number of columns.
+
+`period` defaults to `all` here, unlike the sections: the export is the
+corpus of a niche, not a window into it. Both outlier baselines are always
+in the table -- `outlier_base` only picks which one the row filtering thinks
+with, and the reader of the file cannot recompute the missing one.
 
 ---
 

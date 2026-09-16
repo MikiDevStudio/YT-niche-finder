@@ -34,3 +34,22 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     if denom == 0:
         return 0.0
     return float(np.dot(a, b) / denom)
+
+
+def cosine_matrix(queries, vecs) -> np.ndarray:
+    """Every query against every vector at once: shape (len(queries), len(vecs)).
+
+    check_ideas asks twenty phrases about a few thousand videos, which is a
+    few tens of thousands of cosines -- one matrix product instead of a Python
+    loop turns that from seconds into milliseconds. A zero-length vector keeps
+    the 0.0 that `cosine` gives it, rather than a NaN spreading through the row.
+    """
+    if not len(queries) or not len(vecs):
+        return np.zeros((len(queries), len(vecs)), dtype=np.float32)
+
+    def _unit(rows):
+        m = np.vstack([np.asarray(v, dtype=np.float32) for v in rows])
+        norms = np.linalg.norm(m, axis=1, keepdims=True)
+        return m / np.where(norms == 0, 1.0, norms)
+
+    return _unit(queries) @ _unit(vecs).T

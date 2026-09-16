@@ -52,6 +52,16 @@ QUERIES = [q.strip() for q in os.environ.get("WORKER_QUERIES", "").split(",") if
 QUERY_PERIOD = os.environ.get("WORKER_QUERY_PERIOD", "24h")
 QUERY_PAGES = int(os.environ.get("WORKER_QUERY_PAGES", "1"))
 
+# Автоматическая разметка тегами (#7). Единственное, что стоит денег, поэтому
+# выключено по умолчанию и включается только вместе со списком ниш: разметить
+# «все ниши подряд» -- не то, за что хочется платить по недосмотру.
+LLM_TAGGING_INTERVAL_MIN = int(os.environ.get("LLM_TAGGING_INTERVAL_MIN", "1440"))
+LLM_TAGGING_NICHES = [n.strip() for n in
+                      os.environ.get("LLM_TAGGING_NICHES", "").split(",") if n.strip()]
+LLM_TAGGING_GROUP = (os.environ.get("LLM_TAGGING_GROUP", "") or "").strip() or None
+LLM_TAGGING_LIMIT = int(os.environ.get("LLM_TAGGING_LIMIT", "100"))
+LLM_TAGGING_MAX_COST_USD = float(os.environ.get("LLM_TAGGING_MAX_COST_USD", "0.25"))
+
 _stop = False
 
 
@@ -148,6 +158,37 @@ def cycle():
                     API_KEY, query, period=QUERY_PERIOD, pages=QUERY_PAGES, embed=True))
         _mark("daily")
 
+    if _due("llm_tagging", LLM_TAGGING_INTERVAL_MIN):
+        _tag_new_videos()
+        _mark("llm_tagging")
+
+
+def _tag_new_videos():
+    """Разметить новые ролики моделью. Стоимость печатается в лог по каждой
+    нише: без строки с ценой «включил и забыл» превращается в счёт-сюрприз."""
+    from application import auto_tagging
+
+    if not auto_tagging.enabled():
+        return
+    if not LLM_TAGGING_NICHES:
+        log("llm tagging: LLM_TAGGING=1, но LLM_TAGGING_NICHES пуст -- нечего размечать")
+        return
+    for niche in LLM_TAGGING_NICHES:
+        res = _safe(f"llm tagging '{niche}'", lambda niche=niche: auto_tagging.tag_niche(
+            niche, tag_group=LLM_TAGGING_GROUP, limit=LLM_TAGGING_LIMIT,
+            max_cost_usd=LLM_TAGGING_MAX_COST_USD))
+        for group in (res or {}).get("groups", []):
+            log(f"  {niche}/{group['group']}: размечено {group['labelled']} из "
+                f"{group['candidates']}, записано {group['written']}, "
+                f"${group['costUsd']:.4f}, токенов "
+                f"{group['usage']['promptTokens']}+{group['usage']['completionTokens']}"
+                + (f" | {group['hint']}" if group.get("hint") else ""))
+
+
+def _llm_tagging_on() -> bool:
+    from application import auto_tagging
+    return auto_tagging.enabled() and bool(LLM_TAGGING_NICHES)
+
 
 def main():
     if not API_KEY:
@@ -164,7 +205,8 @@ def main():
         f"alerts scan every {ALERTS_INTERVAL_MIN}min | "
         f"hot every {HOT_INTERVAL_MIN}min "
         f"({HOT_PERIOD}) | daily every {DAILY_INTERVAL_MIN}min ({FULL_PERIOD}) "
-        f"| regions={REGIONS} | trending={DO_TRENDING} | queries={len(QUERIES)}")
+        f"| regions={REGIONS} | trending={DO_TRENDING} | queries={len(QUERIES)} "
+        f"| llm tagging={'on' if _llm_tagging_on() else 'off'}")
     while not _stop:
         cycle()
         for _ in range(60):

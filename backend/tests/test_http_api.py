@@ -177,6 +177,45 @@ def test_tag_routes_write_read_and_delete():
     assert client.get(f"/api/videos/vhttpbig1/tags").json()["count"] == 0
 
 
+def test_export_route_returns_a_tsv_attachment_with_the_niche_videos():
+    """Экспорт ниши (#5): тот же use case, что и у CLI, поверх реальной базы."""
+    api._rate_hits.clear()
+    client.post("/api/tags", json={"items": [
+        {"videoId": "vhttpbig1", "group": "topic_group_export", "tag": "A"}]})
+
+    try:
+        _assert_export_row()
+    finally:
+        # чужой тег в общей нише сломал бы соседний тест -- убираем его даже
+        # если проверка упала на первом же assert
+        client.delete("/api/videos/vhttpbig1/tags/topic_group_export/a")
+
+
+def _assert_export_row():
+    resp = client.get(f"/api/niches/{NICHE}/export.tsv")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/tab-separated-values")
+    assert "attachment" in resp.headers["content-disposition"]
+    assert ".tsv" in resp.headers["content-disposition"]
+
+    header, row = resp.text.rstrip("\n").split("\n")
+    assert header.split("\t")[:4] == ["channel", "handle", "subs", "video_id"]
+    cells = dict(zip(header.split("\t"), row.split("\t")))
+    assert cells["video_id"] == "vhttpbig1"
+    assert cells["channel"] == "Big Competitor"
+    assert cells["subs"] == "74600"
+    assert cells["views"] == "55000"
+    assert cells["likes"] == "100" and cells["comments"] == "10"
+    assert cells["published_at"] == "2026-07-01T00:00:00Z"
+    assert cells["tags"] == "topic_group_export=a"
+
+
+def test_export_route_validates_the_outlier_base():
+    api._rate_hits.clear()
+    bad = client.get(f"/api/niches/{NICHE}/export.tsv", params={"outlier_base": "mean"})
+    assert bad.status_code == 400
+
+
 def test_tag_routes_reject_bad_input_with_400():
     api._rate_hits.clear()
     assert client.post("/api/tags", json={"items": []}).status_code == 400

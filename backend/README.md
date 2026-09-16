@@ -163,6 +163,7 @@ make cli ARGS="viral --period 24h --period-by discovered"
 make cli ARGS="categories --period 7d --rank-by channels"
 make cli ARGS="keywords --period 24h"
 make cli ARGS="channels --period 24h"             # outlier channels
+make cli ARGS="export-niche brain --out brain.tsv"   # the niche as a TSV table
 make cli ARGS="seed"                              # synthetic data, just to look around
 ```
 
@@ -329,6 +330,35 @@ Videos younger than 30 days sit out of both sides of the hit-rate fraction by
 default: their views are still coming in, so counting them makes a freshly
 explored topic look like a flop. `include_fresh=True` puts them back, and
 `freshExcluded` says how many that was either way.
+
+### Exporting a niche
+
+The corpus of one niche as a table, for the research notes in YT-analyze
+(`niches/<niche>/data/`): one row per video, with the channel it came from,
+both outlier baselines and whatever topic tags it carries.
+
+```bash
+make cli ARGS="export-niche brain"                  # videos_YYYY-MM-DD.tsv here
+make cli ARGS="export-niche brain --out brain.tsv"
+make cli ARGS="export-niche brain --out -"          # to stdout, to pipe onwards
+curl -OJ 'http://localhost:8080/api/niches/brain/export.tsv'
+```
+
+Columns: `channel, handle, subs, video_id, published_at, views, likes,
+comments, length_seconds, is_short, title, outlierScoreRolling,
+outlierScorePeriod, tags`. Appended to, never reordered -- a parser on the
+other side depends on it. Tags of one video share a cell, as
+`group=tag1,tag2; other=tag3`, so a moving taxonomy does not change the
+shape of the file.
+
+TSV rather than CSV: titles are full of commas and quotes, and TSV needs no
+quoting rules for those. Tabs and newlines inside a field are turned into
+spaces, so a split on tabs always yields the same number of columns.
+
+`period` defaults to `all` here, unlike the sections: the export is the
+corpus of a niche, not a window into it. Both outlier baselines are always
+in the table -- `outlier_base` only picks which one the row filtering thinks
+with, and the reader of the file cannot recompute the missing one.
 
 ---
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 try:
@@ -36,6 +36,7 @@ from application import library as L
 from application import metadata_review as MR
 from application import alerts as AL
 from application import tagging as TAG
+from application import exporting as EX
 from domain import metrics as M
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
@@ -324,6 +325,29 @@ def niche_videos(slug: str, period: str = "all", channels: str = None,
                           exclude_shorts=exclude_shorts,
                           outlier_base=_outlier_base(outlier_base),
                           outlier_threshold=outlier_threshold)
+
+
+@app.get("/api/niches/{slug}/export.tsv")
+def niche_export_tsv(slug: str, period: str = "all", channels: str = None,
+                     exclude_shorts: bool = False, outlier_base: str = "rolling",
+                     outlier_threshold: float = 2.0):
+    """Ниша целиком в TSV -- файл для `niches/<ниша>/data/` в YT-analyze.
+
+    Отдаём как attachment с именем videos_ГГГГ-ММ-ДД.tsv: ссылку из дашборда
+    жмут, чтобы получить файл, а не чтобы посмотреть таблицу в браузере.
+    """
+    ids = [c.strip() for c in (channels or "").split(",") if c.strip()]
+    try:
+        res = EX.niche_tsv(slug, period=period, channel_ids=ids or None,
+                           exclude_shorts=exclude_shorts,
+                           outlier_base=_outlier_base(outlier_base),
+                           outlier_threshold=outlier_threshold)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return PlainTextResponse(
+        res["tsv"], media_type="text/tab-separated-values; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{res["filename"]}"',
+                 "X-Niche-Rows": str(res["rows"])})
 
 
 # ------------------------------------------------- теги тем на роликах (#2)

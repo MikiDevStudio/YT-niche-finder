@@ -7,13 +7,17 @@ chart snapshots, and title/thumbnail change detection.
 Schema v3 (iteration 8) adds the swipe file (saved_items), metadata-review
 drafts with their post-publish outcome (drafts), and worker-generated
 alerts (events) -- see docs/plan-iteration-8.md.
+
+Schema v4 (issue #2) adds video_tags: the topic taxonomy a human or a model
+puts on videos by hand, as opposed to `videos.tags`, which is whatever the
+creator typed on YouTube.
 """
 from datetime import datetime, timezone
 
 from domain.channel_refs import is_channel_id, parse_channel_ref
 from infrastructure.postgres.connection import get_conn  # noqa: F401  (re-export for callers)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
@@ -176,6 +180,32 @@ CREATE INDEX IF NOT EXISTS idx_saved_items_kind_ref ON saved_items(kind, ref_id)
 CREATE INDEX IF NOT EXISTS idx_drafts_video ON drafts(video_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_seen ON events(seen_at);
+
+-- ---------------------- v4: topic tags put on videos by hand (issue #2) ----
+--
+-- Not to be confused with videos.tags (the creator's own YouTube tags). This
+-- is our own taxonomy: which topic group a video belongs to, which triggers
+-- it pulls, which noun it is about.
+--
+-- Every group is multi-valued (tag is part of the key), because triggers
+-- genuinely come in threes; single-valued groups are enforced at write time
+-- by the `replace` flag, not by the schema.
+--
+-- The niche is deliberately NOT a column: video_niches already ties a video
+-- to its niches, and per-niche taxonomies are kept apart by the group name
+-- (topic_group_economics, topic_group_prefab). A tag follows its video into
+-- whatever niche it also belongs to.
+CREATE TABLE IF NOT EXISTS video_tags (
+    video_id TEXT,
+    tag_group TEXT,
+    tag TEXT,
+    source TEXT,             -- 'manual' | 'claude-mcp' | 'llm'
+    created_at TEXT,
+    PRIMARY KEY (video_id, tag_group, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_tags_group ON video_tags(tag_group, tag);
+CREATE INDEX IF NOT EXISTS idx_video_tags_video ON video_tags(video_id);
 """
 
 # columns added to pre-existing tables (name -> DDL type)

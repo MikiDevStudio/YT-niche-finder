@@ -43,4 +43,7 @@ from infrastructure.postgres.repositories import (  # noqa: F401
     upsert_category,
     get_meta,
     set_meta,
+    upsert_video_tags,
+    delete_video_tags,
+    video_tags_for,
 )

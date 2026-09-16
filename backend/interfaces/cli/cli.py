@@ -10,6 +10,7 @@
     python cli.py categories --period 7d --rank-by channels
     python cli.py keywords --period 24h
     python cli.py channels --period 24h       outlier-каналы
+    python cli.py export-niche brain --out videos.tsv   ниша в TSV
     python cli.py stats
     python cli.py seed                        синтетические данные для примера
 
@@ -185,6 +186,30 @@ def cmd_embed_videos(args):
     out(collector.backfill_embeddings(limit=args.limit))
 
 
+def cmd_export_niche(args):
+    """Ниша целиком в TSV -- файл для niches/<ниша>/data/ в YT-analyze.
+
+    Сводка печатается в stderr, а не в stdout: `--out -` кладёт таблицу в
+    stdout, и её должно быть можно перенаправить в файл, не вычищая потом
+    строку «записано N роликов».
+    """
+    from application import exporting as EX
+    res = EX.niche_tsv(args.niche, period=args.period, exclude_shorts=args.exclude_shorts,
+                       outlier_base=args.outlier_base,
+                       outlier_threshold=args.outlier_threshold)
+    if args.out == "-":
+        sys.stdout.write(res["tsv"])
+    else:
+        path = args.out or res["filename"]
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(res["tsv"])
+        print(f"{path}: {res['rows']} роликов, {res['channels']} каналов, "
+              f"с тегами {res['taggedRows']}", file=sys.stderr)
+    if res["hint"]:
+        print(f"\n>>> {res['hint']}", file=sys.stderr)
+    return 0
+
+
 def cmd_seed(args):
     # cli.py now lives at backend/interfaces/cli/ (two levels deeper than the
     # old flat backend/cli.py), so climb back up to backend/ before reaching
@@ -230,6 +255,17 @@ def main():
     p.add_argument("--period", default="30d")
     p.add_argument("--limit", type=int, default=1000)
     p.set_defaults(fn=cmd_refresh)
+
+    p = sub.add_parser("export-niche", help="ниша в TSV для документации YT-analyze")
+    p.add_argument("niche", help="slug ниши (list_niches / cli.py stats)")
+    p.add_argument("--out", help="путь к файлу; '-' -- в stdout; "
+                                 "по умолчанию videos_ГГГГ-ММ-ДД.tsv в текущей папке")
+    p.add_argument("--period", default="all",
+                   help="по умолчанию all: экспорт -- это корпус ниши, а не окно в нём")
+    p.add_argument("--exclude-shorts", action="store_true")
+    p.add_argument("--outlier-base", default="rolling", choices=["rolling", "period"])
+    p.add_argument("--outlier-threshold", type=float, default=2.0)
+    p.set_defaults(fn=cmd_export_niche)
 
     def period_args(p, default="7d"):
         p.add_argument("--period", default=default)

@@ -50,7 +50,7 @@ jobs:
           # sqlite doubles and pure domain code: no Postgres, no network
           for t in test_inspection test_metadata_review test_alerts test_alerts_domain \
                    test_library test_rss test_top_tags test_keywords_domain test_metadata_domain \
-                   test_tagging test_tag_stats_domain; do
+                   test_tagging test_tag_stats_domain test_export; do
             coverage run -a --source=. --omit="tests/*" "tests/$t.py"
           done
           coverage report -m

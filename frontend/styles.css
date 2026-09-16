@@ -23,6 +23,9 @@
   --cat-2:        #d95926;
   --cat-3:        #199e70;
   --other:        #898781;
+  /* «без тега» на графике ниши: не четвёртый цвет, а приглушённая точка —
+     она должна читаться как отсутствие разметки, а не как ещё одна группа */
+  --untagged:     #55534e;
   --good:         #0ca30c;
   --warning:      #fab219;
   --critical:     #d03b3b;
@@ -49,6 +52,7 @@
   --cat-2:        #eb6834;
   --cat-3:        #1baf7a;
   --other:        #898781;
+  --untagged:     #c9c8c1;
   --good:         #006300;
 }
 
@@ -256,6 +260,17 @@ select:focus-visible, input:focus-visible, button:focus-visible, a:focus-visible
 .chip-accent { background: var(--series-soft); border-color: transparent; color: var(--ink); }
 .chip-good { color: var(--good); }
 .chip-bad  { color: var(--critical); }
+
+/* чипы тегов в таблице разметки: крестик снимает тег, «+» открывает поле */
+.tag-cell { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.tag-cell .chip { display: inline-flex; align-items: center; gap: 4px; }
+.tag-del, .tag-add {
+  background: none; border: 0; padding: 0; cursor: pointer; line-height: 1;
+  color: var(--muted); font-size: 13px;
+}
+.tag-del:hover { color: var(--critical); }
+.tag-add { color: var(--ink-2); padding: 0 2px; }
+.tag-add:hover { color: var(--ink); }
 
 /* --------------------------------------------------------------- таблица */
 

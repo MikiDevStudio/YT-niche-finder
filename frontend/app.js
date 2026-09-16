@@ -770,6 +770,15 @@ function nicheOverviewBlock(d, head) {
    Ранг считается по всей нише, а период, Shorts и скрытые каналы фильтруются
    на клиенте: цвет следует за каналом и не перекрашивается от фильтра. */
 const CHANNEL_SLOTS = ['--cat-1', '--cat-2', '--cat-3'];
+/* Раскраска по тегам берёт те же три слота: больше трёх различимых при
+   дальтонизме цветов в палитре нет. Поэтому «другие теги» и «без тега» —
+   не четвёртый и пятый цвет, а серый и бледно-серый, и оба названы в легенде.
+   Ролик с несколькими тегами группы (три триггера — норма) красится по
+   самому частому из своих тегов; разобрать такие точки поимённо дают чипы-
+   фильтры, а не ещё один цвет. */
+const TAG_OTHER = '--other';
+const TAG_NONE = '--untagged';
+const NO_TAG = '__untagged__';          // псевдо-тег «без тега» в фильтре
 const FRESH_LABEL = 'моложе 30 дней';
 
 function periodCutoff(period) {
@@ -795,20 +804,101 @@ function commonLead(titles) {
   return n > 1 && n >= titles.length / 3 ? lead : '';
 }
 
-function nicheScatterFilters(d, opts) {
+/* ------------------------------------------------------- теги ниши (#2) */
+
+/* Ответ /api/niches/{slug}/tags -> то, чем пользуются график, чипы и таблица:
+   карта ролик -> группа -> теги, порядок тегов внутри группы по частоте. */
+function tagContext(res) {
+  const byVideo = new Map();
+  for (const it of res.items || []) {
+    const groups = byVideo.get(it.videoId) || new Map();
+    const tags = groups.get(it.group) || new Set();
+    tags.add(it.tag);
+    groups.set(it.group, tags);
+    byVideo.set(it.videoId, groups);
+  }
+  const groups = res.groups || [];
+  const rank = new Map(groups.map((g) => [g.group, new Map(g.tags.map((t, i) => [t.tag, i]))]));
+  return { byVideo, groups, rank, count: res.count || 0 };
+}
+
+function videoTags(ctx, videoId, group) {
+  const g = ctx.byVideo.get(videoId);
+  if (!g) return [];
+  if (group) return [...(g.get(group) || [])];
+  return [...g].flatMap(([grp, tags]) => [...tags].map((t) => `${grp}:${t}`));
+}
+
+/* То же, но парами: в таблице разметки группа едет отдельным атрибутом, иначе
+   тег с двоеточием внутри развалил бы запрос на удаление. */
+function videoTagPairs(ctx, videoId, group) {
+  const g = ctx.byVideo.get(videoId);
+  if (!g) return [];
+  if (group) return [...(g.get(group) || [])].map((tag) => ({ group, tag }));
+  return [...g].flatMap(([grp, tags]) => [...tags].map((tag) => ({ group: grp, tag })));
+}
+
+/* Цвет точки — по самому частому из тегов ролика: правило названо в легенде,
+   поэтому оно читается, а не выглядит выбранным наугад. */
+function tagColor(ctx, videoId, group, slots) {
+  const tags = videoTags(ctx, videoId, group);
+  if (!tags.length) return TAG_NONE;
+  const order = ctx.rank.get(group) || new Map();
+  const best = tags.slice().sort((a, b) =>
+    (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9) || a.localeCompare(b))[0];
+  return slots.get(best) || TAG_OTHER;
+}
+
+function tagSlots(ctx, group) {
+  const g = ctx.groups.find((x) => x.group === group);
+  return new Map((g ? g.tags.slice(0, CHANNEL_SLOTS.length) : [])
+    .map((t, i) => [t.tag, CHANNEL_SLOTS[i]]));
+}
+
+function passesTagFilter(ctx, videoId, opts) {
+  if (!opts.group) return true;
+  const tags = videoTags(ctx, videoId, opts.group);
+  if (!tags.length) return !opts.offTags.has(NO_TAG);
+  return tags.some((t) => !opts.offTags.has(t));
+}
+
+function visibleVideos(d, opts, ctx) {
+  const cut = periodCutoff(state.period);
+  return d.videos.filter((v) => !opts.hidden.has(v.channelId) && !(opts.noShorts && v.isShort)
+    && (cut == null || new Date(v.publishedAt).getTime() >= cut)
+    && passesTagFilter(ctx, v.videoId, opts));
+}
+
+function nicheScatterFilters(d, opts, ctx) {
+  const group = ctx.groups.find((g) => g.group === opts.group);
+  const chips = group ? group.tags.map((t) =>
+    `<label class="check"><input type="checkbox" data-tag="${esc(t.tag)}"${
+      opts.offTags.has(t.tag) ? '' : ' checked'}>${esc(t.tag)}
+      <span class="legend-note">${t.videos}</span></label>`).join('')
+    + `<label class="check"><input type="checkbox" data-tag="${NO_TAG}"${
+      opts.offTags.has(NO_TAG) ? '' : ' checked'}>без тега</label>` : '';
+
   return `<span class="field-label">Каналы на графике</span>
     ${d.channels.map((c, i) => `<label class="check"><input type="checkbox" data-channel="${esc(c.channelId)}"${
       opts.hidden.has(c.channelId) ? '' : ' checked'}><i class="legend-dot" style="--c:var(${
       CHANNEL_SLOTS[i] || '--other'})"></i>${esc(c.title || c.channelId)}</label>`).join('')}
-    <label class="check"><input type="checkbox" data-shorts${opts.noShorts ? ' checked' : ''}>скрыть Shorts</label>`;
+    <label class="check"><input type="checkbox" data-shorts${opts.noShorts ? ' checked' : ''}>скрыть Shorts</label>
+    <span class="field-label">Раскрасить по</span>
+    <select id="tagGroupPick">
+      <option value="">каналам</option>
+      ${ctx.groups.map((g) => `<option value="${esc(g.group)}"${
+        g.group === opts.group ? ' selected' : ''}>${esc(g.group)} (${g.videos})</option>`).join('')}
+    </select>
+    ${chips}`;
 }
 
-function nicheScatter(d, opts) {
+function nicheScatter(d, opts, ctx) {
+  const byTag = !!opts.group;
+  const slots = byTag ? tagSlots(ctx, opts.group) : null;
   const slot = new Map(d.channels.map((c, i) => [c.channelId, CHANNEL_SLOTS[i] || '--other']));
   const name = new Map(d.channels.map((c) => [c.channelId, c.title || c.channelId]));
-  const cut = periodCutoff(state.period);
-  const vids = d.videos.filter((v) => !opts.hidden.has(v.channelId) && !(opts.noShorts && v.isShort)
-    && (cut == null || new Date(v.publishedAt).getTime() >= cut));
+  const color = (v) => (byTag ? tagColor(ctx, v.videoId, opts.group, slots) : slot.get(v.channelId));
+  const vids = visibleVideos(d, opts, ctx);
   const outliers = vids.filter((v) => v.isOutlier).sort((a, b) => b.outlierScore - a.outlierScore);
   const top = new Map(outliers.slice(0, 5).map((v, i) => [v.videoId, i]));
   const lead = commonLead(d.videos.map((v) => v.title));
@@ -817,32 +907,42 @@ function nicheScatter(d, opts) {
     return s.length > 24 ? `${s.slice(0, 23)}…` : s;
   };
   const base = d.outlierBase === 'period' ? 'против медианы ±15 дней' : 'против медианы 10 прошлых';
+  const tagLine = (v) => {
+    const tags = videoTags(ctx, v.videoId, opts.group);
+    return tags.length ? `<br>${esc(opts.group)}: ${esc(tags.join(', '))}` : '';
+  };
 
   const chart = scatterChart(vids.map((v) => ({
-    t: v.publishedAt, v: v.views, color: slot.get(v.channelId),
+    t: v.publishedAt, v: v.views, color: color(v),
     big: v.isOutlier, hollow: v.isFresh,
     label: top.has(v.videoId) ? `${shortTitle(v.title || '')} ${mult(v.outlierScore)}` : null,
     labelRank: top.get(v.videoId),
     tip: `<b>${num(v.views)}</b> просмотров · <b>${mult(v.outlierScore)}</b> ${base}<br>${esc(v.title)}<br>`
       + `${esc(name.get(v.channelId))} · ${new Date(v.publishedAt).toLocaleDateString('ru-RU')} · ${clock(v.lengthSeconds)}`
+      + (byTag ? tagLine(v) : '')
       + (v.isFresh ? `<br>${FRESH_LABEL}: просмотры ещё набираются` : ''),
   })), { width: view.clientWidth - 48, height: 360, valueLabel: 'просмотров' });
 
   const groups = new Map();
   for (const v of vids) {
-    const k = slot.get(v.channelId);
+    const k = color(v);
     const g = groups.get(k) || { videos: 0, outliers: 0, names: new Set() };
-    g.videos += 1; g.outliers += v.isOutlier ? 1 : 0; g.names.add(name.get(v.channelId));
+    g.videos += 1; g.outliers += v.isOutlier ? 1 : 0;
+    g.names.add(byTag ? (videoTags(ctx, v.videoId, opts.group)[0] || '') : name.get(v.channelId));
     groups.set(k, g);
   }
-  const legend = [...CHANNEL_SLOTS, '--other'].filter((k) => groups.has(k)).map((k) => {
+  const tagLabel = new Map([...tagSlots(ctx, opts.group) || []].map(([t, k]) => [k, t]));
+  const legend = [...CHANNEL_SLOTS, TAG_OTHER, TAG_NONE].filter((k) => groups.has(k)).map((k) => {
     const g = groups.get(k);
-    const label = k === '--other' ? `другие каналы (${g.names.size})` : [...g.names][0];
-    return `<span class="legend-item"><i class="legend-dot" style="--c:var(${k})"></i>${esc(label)}
+    const label = byTag
+      ? (k === TAG_NONE ? 'без тега' : k === TAG_OTHER ? `другие теги (${g.names.size})` : tagLabel.get(k))
+      : (k === '--other' ? `другие каналы (${g.names.size})` : [...g.names][0]);
+    return `<span class="legend-item"><i class="legend-dot" style="--c:var(${k})"></i>${esc(label || '—')}
       <span class="legend-note">${g.videos} видео · ${g.outliers} аутл.</span></span>`;
   }).join('')
     + `<span class="legend-item"><i class="legend-dot big" style="--c:var(--muted)"></i>аутлаер ≥ ${d.outlierThreshold}x</span>`
-    + `<span class="legend-item"><i class="legend-dot hollow" style="--c:var(--muted)"></i>${FRESH_LABEL}</span>`;
+    + `<span class="legend-item"><i class="legend-dot hollow" style="--c:var(--muted)"></i>${FRESH_LABEL}</span>`
+    + (byTag ? `<span class="legend-item legend-note">цвет — по самому частому тегу ролика</span>` : '');
 
   return `<div class="card">
     ${sectionHead('Ролики ниши во времени', `${pl(vids.length, 'ролик', 'ролика', 'роликов')} · ${
@@ -862,34 +962,194 @@ function nicheScatter(d, opts) {
   </div>`;
 }
 
+/* Хит-рейт считается сервером по ВСЕЙ нише, а не по выбранному наверху
+   периоду: это свойство таксономии, а не последних 30 дней, и окно в 30 дней
+   вырезало бы как раз те ролики, по которым тег и проверяется. */
+function tagStatsCard(stats, group) {
+  if (!group) return '';
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const rows = (stats.tags || []).map((t) => ({
+    name: t.tag,
+    value: t.hitRate,
+    display: `${pct(t.hitRate)}${t.lift != null ? ` · ×${t.lift}` : ''}${
+      t.videos < 5 ? ' · выборка мала' : ''}`,
+    tip: `${t.hits} из ${t.videos} роликов — аутлаеры<br>медиана ${num(t.medianViews)} просмотров${
+      t.medianOutlier != null ? ` · медианный множитель ${mult(t.medianOutlier)}` : ''}${
+      t.videos < 5 ? '<br>меньше пяти роликов: число ещё шумит' : ''}`,
+  }));
+  const sub = `база по нише: ${pct(stats.baseRate)} аутлаеров (${stats.hits} из ${stats.videos})`
+    + ` · порог ${stats.outlierThreshold}x · по всем роликам ниши`
+    + (stats.freshExcluded ? ` · ${stats.freshExcluded} ${FRESH_LABEL} не в счёт` : '')
+    + (stats.untagged ? ` · ${stats.untagged} без тега` : '');
+  return `<div class="card">
+    ${sectionHead(`Хит-рейт тегов: ${group}`, sub)}
+    ${rows.length ? barList(rows) : notice(esc(stats.hint || 'нет данных по этой группе'))}
+  </div>`;
+}
+
+/* Правка тегов руками: массовую разметку делает MCP-тул tag_videos одним
+   вызовом, здесь исправляют его ошибки, поэтому редактор строчный. */
+function tagTableCard(d, opts, ctx, onlyUntagged) {
+  const vids = visibleVideos(d, opts, ctx)
+    .slice().sort((a, b) => (b.outlierScore || 0) - (a.outlierScore || 0));
+  const rows = onlyUntagged
+    ? vids.filter((v) => !videoTags(ctx, v.videoId, opts.group).length)
+    : vids;
+  const chips = (v) => {
+    const pairs = videoTagPairs(ctx, v.videoId, opts.group);
+    return `<span class="tag-cell" data-video="${esc(v.videoId)}">${
+      pairs.map((p) => `<span class="chip">${esc(opts.group ? p.tag : `${p.group}:${p.tag}`)}<button
+        type="button" class="tag-del" data-video="${esc(v.videoId)}" data-group="${esc(p.group)}"
+        data-tag="${esc(p.tag)}" title="снять тег">×</button></span>`).join('')
+    }<button type="button" class="chip tag-add" data-video="${esc(v.videoId)}"
+        title="добавить тег">+</button></span>`;
+  };
+  return `<div class="card">
+    ${sectionHead('Разметка', `${pl(rows.length, 'ролик', 'ролика', 'роликов')} · ${
+      opts.group ? `группа ${opts.group}` : 'все группы'} · правка пишется как manual`)}
+    <div class="scatter-filters">
+      <label class="check"><input type="checkbox" id="tagOnlyUntagged"${
+        onlyUntagged ? ' checked' : ''}>только без тега</label>
+      ${opts.group ? '' : '<span class="legend-note">теги показаны как «группа:тег» — выберите группу выше, чтобы править одну</span>'}
+    </div>
+    ${table([
+      { label: 'Видео', wrap: true, render: (v) => `<a href="https://www.youtube.com/watch?v=${esc(v.videoId)}" target="_blank" rel="noopener">${esc(v.title)}</a>` },
+      { label: 'Опубликовано', render: (v) => new Date(v.publishedAt).toLocaleDateString('ru-RU') },
+      { label: 'Просмотры', num: true, render: (v) => num(v.views) },
+      { label: 'Множитель', num: true, render: (v) => mult(v.outlierScore) },
+      { label: 'Теги', wrap: true, render: chips },
+    ], rows)}
+  </div>`;
+}
+
 async function viewNiche(slug) {
-  const [d, pts] = await Promise.all([
+  const [d, pts, tags] = await Promise.all([
     api(`/api/niches/${encodeURIComponent(slug)}${q({ period: state.period, outlier_base: state.outlierBase })}`),
     api(`/api/niches/${encodeURIComponent(slug)}/videos${q({ outlier_base: state.outlierBase })}`),
+    api(`/api/niches/${encodeURIComponent(slug)}/tags`),
   ]);
   if (!d.found && !pts.videoCount) { view.innerHTML = notice(esc(d.hint || 'ниша не найдена')); return; }
 
+  let ctx = tagContext(tags);
   const key = `nf.scatter.${slug}`;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(key) || '{}'); } catch { /* приватный режим */ }
-  const opts = { hidden: new Set(saved.hidden || []), noShorts: !!saved.noShorts };
+  const opts = { hidden: new Set(saved.hidden || []), noShorts: !!saved.noShorts,
+                 group: ctx.groups.some((g) => g.group === saved.group) ? saved.group : '',
+                 offTags: new Set(saved.offTags || []) };
+  let onlyUntagged = false;
+  let stats = null;
+
+  const remember = () => {
+    try {
+      localStorage.setItem(key, JSON.stringify({ hidden: [...opts.hidden], noShorts: opts.noShorts,
+                                                 group: opts.group, offTags: [...opts.offTags] }));
+    } catch { /* фильтр просто не запомнится */ }
+  };
 
   view.innerHTML = (d.found
     ? nicheOverviewBlock(d, sectionHead(`Ниша: ${slug}`, `${esc(d.query || '')} · ${plabel(state.period)}`))
     : notice(esc(d.hint || `за ${plabel(state.period)} роликов нет`)))
-    + `<div class="scatter-filters" id="scatterFilters">${nicheScatterFilters(pts, opts)}</div>
-       <div id="scatterCard">${nicheScatter(pts, opts)}</div>`;
+    + `<div class="scatter-filters" id="scatterFilters"></div>
+       <div id="scatterCard"></div><div id="tagStatsCard"></div><div id="tagTableCard"></div>`;
 
-  $('#scatterFilters').addEventListener('change', (e) => {
+  function draw() {
+    $('#scatterFilters').innerHTML = nicheScatterFilters(pts, opts, ctx);
+    $('#scatterCard').innerHTML = nicheScatter(pts, opts, ctx);
+    $('#tagStatsCard').innerHTML = stats ? tagStatsCard(stats, opts.group) : '';
+    $('#tagTableCard').innerHTML = ctx.count || opts.group
+      ? tagTableCard(pts, opts, ctx, onlyUntagged)
+      : notice('теги ещё не проставлены: массовая разметка идёт MCP-тулом '
+             + '<code>tag_videos</code>, здесь её потом правят руками');
+  }
+
+  async function loadStats() {
+    stats = null;
+    if (!opts.group) return;
+    try {
+      stats = await api(`/api/niches/${encodeURIComponent(slug)}/tag-stats${
+        q({ group: opts.group, period: 'all', outlier_base: state.outlierBase })}`);
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  async function reloadTags() {
+    ctx = tagContext(await api(`/api/niches/${encodeURIComponent(slug)}/tags`));
+    await loadStats();
+    draw();
+  }
+
+  await loadStats();
+  draw();
+
+  $('#scatterFilters').addEventListener('change', async (e) => {
     const el = e.target;
     if (el.dataset.channel) {
       if (el.checked) opts.hidden.delete(el.dataset.channel); else opts.hidden.add(el.dataset.channel);
     }
+    if (el.dataset.tag) {
+      if (el.checked) opts.offTags.delete(el.dataset.tag); else opts.offTags.add(el.dataset.tag);
+    }
     if ('shorts' in el.dataset) opts.noShorts = el.checked;
-    try {
-      localStorage.setItem(key, JSON.stringify({ hidden: [...opts.hidden], noShorts: opts.noShorts }));
-    } catch { /* фильтр просто не запомнится */ }
-    $('#scatterCard').innerHTML = nicheScatter(pts, opts);
+    if (el.id === 'tagGroupPick') {
+      opts.group = el.value;
+      opts.offTags = new Set();
+      remember();
+      await loadStats();
+      return draw();
+    }
+    remember();
+    draw();
+  });
+
+  $('#tagTableCard').addEventListener('change', (e) => {
+    if (e.target.id !== 'tagOnlyUntagged') return;
+    onlyUntagged = e.target.checked;
+    draw();
+  });
+
+  /* Правка тегов: снять — крестик на чипе, добавить — «+» и поле с подсказкой
+     из уже существующих тегов. Без выбранной группы тег пишется как
+     «группа:тег», иначе непонятно, куда он ложится. */
+  $('#tagTableCard').addEventListener('click', async (e) => {
+    const del = e.target.closest('.tag-del');
+    if (del) {
+      const { video, group, tag } = del.dataset;
+      try {
+        await api(`/api/videos/${encodeURIComponent(video)}/tags/${
+          encodeURIComponent(group)}/${encodeURIComponent(tag)}`, { method: 'DELETE' });
+        await reloadTags();
+      } catch (err) { toast(err.message, 'err'); }
+      return;
+    }
+    const add = e.target.closest('.tag-add');
+    if (!add) return;
+    const cell = add.closest('.tag-cell');
+    const known = [...new Set(ctx.groups.flatMap((g) => g.tags.map((t) =>
+      (opts.group ? (g.group === opts.group ? t.tag : null) : `${g.group}:${t.tag}`))).filter(Boolean))];
+    cell.innerHTML = `<input type="text" class="tag-input" list="tagKnown" style="width:180px"
+        placeholder="${opts.group ? 'тег' : 'группа:тег'}">
+      <datalist id="tagKnown">${known.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>`;
+    const input = cell.querySelector('.tag-input');
+    input.focus();
+    input.addEventListener('keydown', async (ev) => {
+      if (ev.key === 'Escape') return draw();
+      if (ev.key !== 'Enter') return;
+      const raw = input.value.trim();
+      if (!raw) return draw();
+      const cut = raw.indexOf(':');            // двоеточие делит один раз: сам тег его переживает
+      const group = opts.group || (cut > 0 ? raw.slice(0, cut).trim() : '');
+      const tag = opts.group ? raw : (cut > 0 ? raw.slice(cut + 1).trim() : '');
+      if (!group || !tag) return toast('Формат: группа:тег', 'err');
+      try {
+        await api('/api/tags', { method: 'POST',
+          body: { items: [{ videoId: cell.dataset.video, group, tag }] } });
+        toast('Тег поставлен', 'ok');
+        await reloadTags();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    input.addEventListener('blur', () => setTimeout(() => {
+      if (document.contains(input)) draw();
+    }, 150));
   });
 }
 

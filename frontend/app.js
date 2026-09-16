@@ -1006,7 +1006,8 @@ function tagTableCard(d, opts, ctx, onlyUntagged) {
   };
   return `<div class="card">
     ${sectionHead('Разметка', `${pl(rows.length, 'ролик', 'ролика', 'роликов')} · ${
-      opts.group ? `группа ${opts.group}` : 'все группы'} · правка пишется как manual`)}
+      plabel(state.period)} · ${opts.group ? `группа ${opts.group}` : 'все группы'
+      } · правка пишется как manual`)}
     <div class="scatter-filters">
       <label class="check"><input type="checkbox" id="tagOnlyUntagged"${
         onlyUntagged ? ' checked' : ''}>только без тега</label>

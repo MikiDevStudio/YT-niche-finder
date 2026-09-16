@@ -177,6 +177,34 @@ def test_tag_routes_write_read_and_delete():
     assert client.get(f"/api/videos/vhttpbig1/tags").json()["count"] == 0
 
 
+def test_check_ideas_route_returns_a_verdict_per_idea():
+    """Проверка идей (#3): POST, потому что список приходит из textarea."""
+    api._rate_hits.clear()
+    resp = client.post("/api/ideas/check",
+                       json={"ideas": ["car wash", "underwater basket weaving"],
+                             "niche": NICHE})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 2 and body["quota"] == 0
+    by_idea = {r["idea"]: r for r in body["ideas"]}
+    # «Car Wash» — название ролика ниши, вышел 1 июля 2026, дальше 90 дней
+    assert by_idea["car wash"]["matches"] == 1
+    assert by_idea["car wash"]["videos"][0]["videoId"] == "vhttpbig1"
+    assert by_idea["underwater basket weaving"]["verdict"] == "free"
+    # корпус без эмбеддингов не должен молча притворяться, что искал по смыслу
+    assert body["corpus"]["embedded"] == 0 and "backfill_embeddings" in body["hint"]
+
+
+def test_check_ideas_route_rejects_bad_input_with_400():
+    api._rate_hits.clear()
+    assert client.post("/api/ideas/check", json={"ideas": []}).status_code == 400
+    assert client.post("/api/ideas/check", json={}).status_code == 400
+    assert client.post("/api/ideas/check",
+                       json={"ideas": ["x"], "outlier_base": "mean"}).status_code == 400
+    typo = client.post("/api/ideas/check", json={"ideas": ["x"], "recent": 10})
+    assert typo.status_code == 400 and "recent" in typo.json()["detail"]
+
+
 def test_export_route_returns_a_tsv_attachment_with_the_niche_videos():
     """Экспорт ниши (#5): тот же use case, что и у CLI, поверх реальной базы."""
     api._rate_hits.clear()

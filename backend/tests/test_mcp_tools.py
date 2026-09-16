@@ -207,6 +207,71 @@ def test_similar_channels_ranks_by_cosine_similarity():
     assert ids.index("UCclose00000000000000000") < ids.index("UCfar000000000000000000")
 
 
+def test_check_ideas_verdicts_over_a_real_embedded_corpus():
+    """check_ideas (#3) на настоящих эмбеддингах: совпадение по названию,
+    совпадение по смыслу и идея, которую никто не снимал."""
+    import infrastructure.embeddings.fastembed_provider as emb
+    from datetime import datetime, timedelta, timezone
+
+    niche = "ideas-check-niche"
+    cid = "UCideas00000000000000000"
+    conn = db.get_conn()
+    db.upsert_channel(conn, {
+        "channel_id": cid, "title": "Ideas Channel", "custom_url": "@ideas",
+        "description": "", "subscriber_count": 5000, "video_count": 2,
+        "view_count": 100000, "hidden_subs": 0,
+    })
+
+    def add(video_id, title, published_at):
+        db.upsert_video(conn, {
+            "video_id": video_id, "channel_id": cid, "title": title,
+            "description": "", "published_at": published_at,
+            "duration_seconds": 700, "view_count": 20000, "like_count": 100,
+            "comment_count": 10, "tags": "[]", "default_language": "en",
+            "embedding": emb.to_blob(emb.embed(title)), "is_short": 0,
+            "updated_at": published_at,
+        })
+        db.link_video_niche(conn, video_id, niche)
+
+    recent = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    add("videascar1", "Owning a car wash", recent)
+    add("videascrem1", "crematorium business economics", "2024-02-01T00:00:00Z")
+    db.upsert_niche(conn, niche, None, niche)
+    conn.commit()
+    conn.close()
+
+    res = srv.check_ideas(["car wash", "crematorium business", "underwater basket weaving"],
+                          niche=niche, match_titles=True)
+    by_idea = {r["idea"]: r for r in res["ideas"]}
+
+    car = by_idea["car wash"]
+    assert car["verdict"] == "recent"          # вышло 10 дней назад
+    assert car["videos"][0]["videoId"] == "videascar1"
+    assert car["videos"][0]["matchedBy"] in ("title", "both")
+
+    crem = by_idea["crematorium business"]     # то же самое, но без названия в тексте
+    assert crem["matches"] == 1
+    assert crem["videos"][0]["videoId"] == "videascrem1"
+    assert crem["videos"][0]["similarity"] > 0.55
+
+    assert by_idea["underwater basket weaving"]["verdict"] == "free"
+    assert res["counts"]["free"] == 1
+    assert res["corpus"] == {"videos": 2, "embedded": 2}
+    assert res["quota"] == 0
+
+    semantic_only = srv.check_ideas(["car wash"], niche=niche, match_titles=False)
+    assert semantic_only["ideas"][0]["videos"][0]["matchedBy"] == "semantic"
+
+
+def test_check_ideas_rejects_an_empty_list():
+    try:
+        srv.check_ideas([])
+    except ValueError as e:
+        assert "non-empty" in str(e)
+    else:
+        raise AssertionError("an empty ideas list should be rejected")
+
+
 def test_video_comments_requires_api_key(monkeypatch):
     monkeypatch.setattr(srv, "API_KEY", None)
     try:

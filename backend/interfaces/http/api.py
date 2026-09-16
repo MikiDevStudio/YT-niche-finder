@@ -37,6 +37,7 @@ from application import metadata_review as MR
 from application import alerts as AL
 from application import tagging as TAG
 from application import exporting as EX
+from application import ideas as IDEAS
 from domain import metrics as M
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
@@ -348,6 +349,29 @@ def niche_export_tsv(slug: str, period: str = "all", channels: str = None,
         res["tsv"], media_type="text/tab-separated-values; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{res["filename"]}"',
                  "X-Niche-Rows": str(res["rows"])})
+
+
+# ------------------------------------------------- проверка идей (#3)
+
+@app.post("/api/ideas/check")
+def check_ideas(payload: dict = Body(...)):
+    """Список идей -> вердикт по каждой. POST, а не GET: список приходит из
+    textarea и легко перерастает длину URL. Квоту не тратит."""
+    body = dict(payload or {})
+    ideas = body.pop("ideas", None)
+    allowed = {"niche", "period", "min_similarity", "recent_days", "proven_outlier",
+               "fresh_days", "exclude_shorts", "outlier_base", "examples",
+               "match_titles"}
+    unknown = set(body) - allowed
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail=f"неизвестные параметры: {', '.join(sorted(unknown))}")
+    if "outlier_base" in body:
+        body["outlier_base"] = _outlier_base(body["outlier_base"])
+    try:
+        return IDEAS.check_ideas(ideas, **body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ------------------------------------------------- теги тем на роликах (#2)

@@ -5,7 +5,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](Dockerfile)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](interfaces/http/api.py)
 [![PostgreSQL 16](https://img.shields.io/badge/postgres-16-336791?style=flat-square&logo=postgresql&logoColor=white)](../docker-compose.yml)
-[![MCP](https://img.shields.io/badge/MCP-48%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
+[![MCP](https://img.shields.io/badge/MCP-49%20tools-8A2BE2?style=flat-square)](interfaces/mcp/server.py)
 
 A self-hosted alternative to NexLev / vidIQ / ViewStats: find niches, viral
 videos from small channels, trending categories and keywords **over
@@ -298,6 +298,44 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | `best_time_to_publish` | 168 weekly slots by median age-adjusted outlier |
 | `title_patterns` | which title phrases correlate with breakouts |
 | `calibrate_maturity_curve` | recompute the maturity curve from your own data |
+
+### Checking a list of ideas
+
+A brainstorm is a column of nouns, and every one of them asks the same
+question: did a competitor already make this video, and did it work?
+`check_ideas` answers the whole column in one pass over the corpus.
+
+| Tool | What it does |
+|---|---|
+| `check_ideas` | one verdict per idea, plus the competitor videos behind it |
+
+```
+check_ideas(ideas=["car wash", "funeral home", "laundromat"], niche="econ")
+```
+
+| Verdict | Means |
+|---|---|
+| `free` | nobody in the corpus covered it |
+| `recent` | covered within `recent_days` (90 by default) -- a head-on collision, skip it |
+| `proven` | covered long ago and it broke out (>= `proven_outlier`) -- demand is proven, saturation is the risk |
+| `flopped` | covered long ago and it did not break out |
+
+`recent` is checked before performance on purpose: a video from last month
+competes with yours whether it flopped or not, and its own numbers are not
+final yet. Performance is judged only on videos older than `fresh_days`, the
+same rule the tag hit rate uses.
+
+An idea matches a video two ways, and `matchedBy` says which fired: the phrase
+in the title (whole words, punctuation and case ignored) or cosine over the
+local embeddings (`min_similarity`, 0.55 by default). Short phrases score low
+semantically -- "oil rig" against "The Economics of Owning an Offshore Oil
+Rig" sits around 0.5 -- so the title half is what usually catches them, and
+`corpus.embedded` reports how much of the corpus the semantic half could even
+see. The thresholds are all parameters; every number a verdict was made on
+comes back with it.
+
+Zero quota, local database and local embeddings only. The dashboard has the
+same thing under "Проверка идей": a textarea and a table of verdicts.
 
 ### Topic tags and their hit rate
 

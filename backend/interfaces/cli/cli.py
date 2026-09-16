@@ -11,6 +11,7 @@
     python cli.py keywords --period 24h
     python cli.py channels --period 24h       outlier-каналы
     python cli.py export-niche brain --out videos.tsv   ниша в TSV
+    python cli.py autotag brain --dry-run     разметка тегами через LLM
     python cli.py stats
     python cli.py seed                        синтетические данные для примера
 
@@ -210,6 +211,15 @@ def cmd_export_niche(args):
     return 0
 
 
+def cmd_autotag(args):
+    """Разметить ролики ниши моделью через OpenRouter (#7). Стоит денег."""
+    from application import auto_tagging
+    out(auto_tagging.tag_niche(
+        args.niche, tag_group=args.group, limit=args.limit,
+        batch_size=args.batch_size, model=args.model,
+        max_cost_usd=args.max_cost, dry_run=args.dry_run))
+
+
 def cmd_seed(args):
     # cli.py now lives at backend/interfaces/cli/ (two levels deeper than the
     # old flat backend/cli.py), so climb back up to backend/ before reaching
@@ -255,6 +265,18 @@ def main():
     p.add_argument("--period", default="30d")
     p.add_argument("--limit", type=int, default=1000)
     p.set_defaults(fn=cmd_refresh)
+
+    p = sub.add_parser("autotag", help="разметить ролики ниши моделью через OpenRouter (стоит денег)")
+    p.add_argument("niche", help="slug ниши")
+    p.add_argument("--group", help="одна группа тегов; без неё -- все группы ниши")
+    p.add_argument("--limit", type=int, default=100, help="сколько роликов за запуск")
+    p.add_argument("--batch-size", type=int, default=20, help="роликов в одном запросе")
+    p.add_argument("--model", help="по умолчанию LLM_MODEL из .env")
+    p.add_argument("--max-cost", type=float, default=0.25,
+                   help="потолок расхода в долларах на запуск")
+    p.add_argument("--dry-run", action="store_true",
+                   help="спросить модель, но ничего не записывать")
+    p.set_defaults(fn=cmd_autotag)
 
     p = sub.add_parser("export-niche", help="ниша в TSV для документации YT-analyze")
     p.add_argument("niche", help="slug ниши (list_niches / cli.py stats)")

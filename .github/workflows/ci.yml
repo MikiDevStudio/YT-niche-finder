@@ -51,7 +51,7 @@ jobs:
           for t in test_inspection test_metadata_review test_alerts test_alerts_domain \
                    test_library test_rss test_top_tags test_keywords_domain test_metadata_domain \
                    test_tagging test_tag_stats_domain test_export test_ideas \
-                   test_idea_verdicts_domain; do
+                   test_idea_verdicts_domain test_openrouter test_auto_tagging; do
             coverage run -a --source=. --omit="tests/*" "tests/$t.py"
           done
           coverage report -m

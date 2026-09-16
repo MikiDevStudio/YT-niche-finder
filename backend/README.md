@@ -299,6 +299,56 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | `title_patterns` | which title phrases correlate with breakouts |
 | `calibrate_maturity_curve` | recompute the maturity curve from your own data |
 
+### Tagging new videos automatically
+
+Once a taxonomy has settled on hand-tagged videos, the worker can keep it
+applied to what arrives afterwards, through OpenRouter. Off by default --
+this is the only thing in the project that costs money.
+
+```bash
+make cli ARGS="autotag econ --dry-run"          # ask, write nothing
+make cli ARGS="autotag econ --group topic_group_econ --limit 50"
+```
+
+```
+OPENROUTER_API_KEY=...
+LLM_MODEL=z-ai/glm-5.3-flash
+LLM_TAGGING=1
+LLM_TAGGING_NICHES=econ,brain
+LLM_TAGGING_MAX_COST_USD=0.25
+```
+
+Three properties make it safe to leave running:
+
+* **the taxonomy is closed.** The group's existing tags go into the request as
+  a JSON-schema enum and into the prompt as a list, together with a few
+  examples of how a human used them. A tag that is not in that list is dropped
+  here even if the model returns it, so automatic tagging can never split a
+  group into synonyms.
+* **it adds, never overwrites.** Rows are written with `source="llm"`, which
+  `PROTECTED_BY` in `application/tagging.py` forbids from replacing `manual` or
+  `claude-mcp`. A group with fewer than five hand-tagged videos is skipped
+  entirely: with nothing to imitate there is nothing to automate.
+* **it is bounded.** `limit` videos per run, newest first, in batches, and it
+  stops at `LLM_TAGGING_MAX_COST_USD`. Every run reports tokens and dollars,
+  and the worker logs one line per niche with the cost.
+
+Two things worth knowing before pointing this at another model:
+
+* **the model id must be exactly what OpenRouter's catalogue says**
+  (`https://openrouter.ai/api/v1/models`). A near-miss is a 400, not a
+  fallback.
+* **a declared JSON schema is a strong hint, not a guarantee.** Support is per
+  provider, not per model; requests here carry `strict: true` and
+  `provider.require_parameters`, and `z-ai/glm-5.3-flash` still answered inside
+  a ```json fence with a shape of its own. Both are handled, and everything is
+  re-validated locally.
+* **a reasoning model bills for thinking.** On `z-ai/glm-5.3-flash`,
+  classifying two videos cost 153 reasoning tokens by default and 27 with
+  `reasoning.effort="low"`, which is what the tagger sends. `"none"` is
+  rejected outright -- reasoning is mandatory on that endpoint. Tagging 20
+  videos measured $0.00037, so a 227-video niche is well under a cent.
+
 ### Checking a list of ideas
 
 A brainstorm is a column of nouns, and every one of them asks the same

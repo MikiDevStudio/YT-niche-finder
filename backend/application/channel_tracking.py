@@ -19,6 +19,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import infrastructure.postgres as db
+from application import collecting as collector
 from domain import metrics as M
 from domain import periods as P
 from domain import keywords as K
@@ -53,20 +54,49 @@ def list_tracked() -> list:
     return [dict(r) for r in rows]
 
 
-def track(channel_id: str, note: str = None) -> dict:
+def track(ref: str, note: str = None, api_key: str = None) -> dict:
+    """Add a channel to the watchlist by UC id, @handle or URL.
+
+    Rows are keyed by UC id because that is all the worker can snapshot
+    (channels.list?id=). A handle used to be stored as typed and then never
+    got a single snapshot (issue #14), so it is resolved first -- see
+    collecting.resolve_channel_id for what that costs.
+    """
+    ref = (ref or "").strip()
     conn = db.get_conn()
-    db.track_channel(conn, channel_id, note)
-    conn.commit()
-    conn.close()
-    return {"channelId": channel_id, "tracked": True, "note": note}
+    try:
+        res = collector.resolve_channel_id(conn, api_key, ref)
+        if "error" in res:
+            conn.commit()
+            return {"channelId": None, "tracked": False, "error": res["error"],
+                    "quota": res["quota"]}
+        cid = res["channelId"]
+        db.track_channel(conn, cid, note)
+        if ref != cid:
+            # a row saved under the raw ref before the fix: nothing can snapshot it
+            conn.execute("DELETE FROM tracked_channels WHERE channel_id=?", (ref,))
+        conn.commit()
+    finally:
+        conn.close()
+    out = {"channelId": cid, "tracked": True, "note": note, "quota": res["quota"]}
+    if ref != cid:
+        out["resolvedFrom"] = ref
+    return out
 
 
-def untrack(channel_id: str) -> dict:
+def untrack(ref: str) -> dict:
+    """Stop tracking by UC id, @handle or URL. Never spends quota: a handle
+    that isn't in `channels` is untracked under its literal spelling only."""
+    ref = (ref or "").strip()
     conn = db.get_conn()
-    db.untrack_channel(conn, channel_id)
-    conn.commit()
-    conn.close()
-    return {"channelId": channel_id, "tracked": False}
+    try:
+        cid = collector.resolve_channel_id(conn, None, ref).get("channelId") or ref
+        for key in {ref, cid}:
+            db.untrack_channel(conn, key)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"channelId": cid, "tracked": False}
 
 
 # --------------------------------------------------------------- analytics

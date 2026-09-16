@@ -139,6 +139,19 @@ def untrack_channel(conn, channel_id: str):
     conn.execute("UPDATE tracked_channels SET active=0 WHERE channel_id=?", (channel_id,))
 
 
+def channel_id_for_handle(conn, handle: str):
+    """UC id of an already stored channel by its handle -- no quota.
+
+    custom_url is kept as channels.list returns it ("@name"); older channels
+    can still carry a legacy vanity name without the "@"."""
+    h = handle.lstrip("@").lower()
+    row = conn.execute(
+        "SELECT channel_id FROM channels WHERE lower(custom_url) IN (?, ?) LIMIT 1",
+        ("@" + h, h),
+    ).fetchone()
+    return row["channel_id"] if row else None
+
+
 def new_chart_snapshot(conn, region: str, category_id: str, source: str) -> int:
     row = conn.execute(
         "INSERT INTO chart_snapshots (captured_at, region, category_id, source) "

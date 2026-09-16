@@ -532,24 +532,29 @@ def track_channel(channel: str, note: str = None, collect: bool = True,
                   max_videos: int = 100) -> dict:
     """Add a channel to the watchlist so its stats get snapshotted over time.
 
-    Accepts a UC id, @handle or URL. With collect=True it also pulls the recent
-    uploads immediately (cheap: uploads playlist, ~1 unit per 50 videos).
+    Accepts a UC id, @handle or URL; the watchlist always stores the UC id.
+    With collect=True it also pulls the recent uploads immediately (cheap:
+    uploads playlist, ~1 unit per 50 videos). With collect=False a handle is
+    resolved from the local database for free, or via channels.list?forHandle
+    (1 unit) when the channel hasn't been collected yet.
     """
     _require_key()
-    res = collector.collect_channel(API_KEY, channel, max_videos=max_videos) \
-        if collect else {"channelId": channel}
-    cid = res.get("channelId")
-    if not cid:
+    if not collect:
+        return T.track(channel, note, api_key=API_KEY)
+    res = collector.collect_channel(API_KEY, channel, max_videos=max_videos)
+    if not res.get("channelId"):
         return res
-    T.track(cid, note)
-    return {**res, "tracked": True, "note": note}
+    tracked = T.track(res["channelId"], note)  # already a UC id: free
+    return {**res, **{k: v for k, v in tracked.items() if k != "quota"}}
 
 
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=False, destructive_hint=True,
     idempotent_hint=True, open_world_hint=False))
 def untrack_channel(channel_id: str) -> dict:
-    """Stop tracking a channel (history already collected is kept)."""
+    """Stop tracking a channel (history already collected is kept).
+
+    Takes a UC id, or an @handle / URL of a channel already in the database."""
     return T.untrack(channel_id)
 
 

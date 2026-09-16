@@ -541,10 +541,14 @@ def video_comments(video_id: str, payload: dict = Body(default={})):
 
 @app.post("/api/channels/track")
 def track(payload: dict = Body(...)):
-    cid = (payload.get("channel_id") or "").strip()
-    if not cid:
+    ref = (payload.get("channel_id") or "").strip()
+    if not ref:
         raise HTTPException(status_code=400, detail="нужно поле channel_id")
-    return T.track(cid, payload.get("note"))
+    # UC id, @хэндл или ссылка; хэндл не из базы стоит 1 unit
+    res = T.track(ref, payload.get("note"), api_key=API_KEY)
+    if res.get("error"):
+        raise HTTPException(status_code=404, detail=res["error"])
+    return res
 
 
 @app.delete("/api/channels/tracked/{channel_id}")

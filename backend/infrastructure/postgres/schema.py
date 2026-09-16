@@ -10,6 +10,7 @@ alerts (events) -- see docs/plan-iteration-8.md.
 """
 from datetime import datetime, timezone
 
+from domain.channel_refs import is_channel_id, parse_channel_ref
 from infrastructure.postgres.connection import get_conn  # noqa: F401  (re-export for callers)
 
 SCHEMA_VERSION = 3
@@ -222,6 +223,7 @@ def migrate(conn):
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
                 added.append(f"{table}.{col}")
     _backfill_niche_rows(conn)
+    _rekey_tracked_handles(conn)
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -245,6 +247,40 @@ def _backfill_niche_rows(conn):
         "ON CONFLICT (slug) DO NOTHING",
         (ts, ts),
     )
+
+
+def _rekey_tracked_handles(conn):
+    """Re-key watchlist rows saved under a raw @handle or URL to the UC id.
+
+    track_channel(collect=False) used to store the ref as typed (issue #14),
+    and channels.list?id= knows nothing about handles, so the worker never
+    snapshotted those rows. Only channels already in `channels` are repaired,
+    since a startup migration must not spend quota; the rest stay until the
+    channel is tracked again, which resolves it and drops the old row.
+    """
+    # repositories imports this module, hence the call-time import
+    from infrastructure.postgres.repositories import channel_id_for_handle
+
+    rows = conn.execute(
+        "SELECT channel_id, note, added_at, last_refreshed_at, active FROM tracked_channels"
+    ).fetchall()
+    for r in rows:
+        ref = r["channel_id"]
+        parsed = None if is_channel_id(ref) else parse_channel_ref(ref)
+        if parsed is None:
+            continue
+        kind, value = parsed
+        cid = value if kind == "id" else channel_id_for_handle(conn, value)
+        if not cid:
+            continue
+        conn.execute(
+            "INSERT INTO tracked_channels (channel_id, note, added_at, last_refreshed_at, active) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET "
+            "active=GREATEST(tracked_channels.active, excluded.active), "
+            "note=COALESCE(tracked_channels.note, excluded.note)",
+            (cid, r["note"], r["added_at"], r["last_refreshed_at"], r["active"]),
+        )
+        conn.execute("DELETE FROM tracked_channels WHERE channel_id=?", (ref,))
 
 
 def init_db():

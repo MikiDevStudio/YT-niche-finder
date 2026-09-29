@@ -193,6 +193,7 @@ def collect_niche(api_key: str, query: str, label: str = None, language: str = N
     conn = db.get_conn()
     try:
         db.upsert_niche(conn, slug, query, label or query)
+        db.add_niche_query(conn, slug, query, language, region)
         conn.commit()
 
         calls_today = search_calls_today(conn)

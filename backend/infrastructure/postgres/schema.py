@@ -59,6 +59,17 @@ CREATE TABLE IF NOT EXISTS niches (
     last_collected_at TEXT
 );
 
+-- every search query that fed a niche, so it can be re-run for fresh videos
+CREATE TABLE IF NOT EXISTS niche_queries (
+    niche_slug TEXT NOT NULL,
+    query TEXT NOT NULL,
+    language TEXT,
+    region TEXT,
+    created_at TEXT,
+    last_fresh_at TEXT,
+    PRIMARY KEY (niche_slug, query)
+);
+
 CREATE TABLE IF NOT EXISTS video_niches (
     video_id TEXT,
     niche_slug TEXT,

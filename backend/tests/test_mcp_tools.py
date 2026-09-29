@@ -944,6 +944,24 @@ def test_tag_replace_and_source_protection(monkeypatch):
             raise AssertionError(f"expected ValueError for {bad}")
 
 
+def test_collect_niche_remembers_every_query_of_a_niche(monkeypatch):
+    _no_network(monkeypatch)
+    cid = "UCnichequeries000000001"
+    monkeypatch.setattr(yt, "search_videos", lambda k, q, **kw: {"items": []})
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+
+    srv.collect_niche("first query", label="multi-query", language="en")
+    srv.collect_niche("second query", label="multi-query", language="en")
+    srv.collect_niche("first query", label="multi-query", language="en")   # no duplicate
+
+    conn = db.get_conn()
+    rows = db.niche_queries(conn, "multi-query")
+    conn.close()
+    assert [r["query"] for r in rows] == ["first query", "second query"]
+    assert all(r["language"] == "en" and r["last_fresh_at"] is None for r in rows)
+
+
 if __name__ == "__main__":
     setup_module()
 

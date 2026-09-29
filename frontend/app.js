@@ -520,7 +520,7 @@ const IDEA_VERDICT = {
   free: { label: 'свободно', cls: 'chip-good', note: 'никто не снимал' },
   recent: { label: 'снято недавно', cls: 'chip-bad', note: 'лобовое столкновение — пропустить' },
   proven: { label: 'спрос доказан', cls: 'chip-accent', note: 'снимали давно и пробило — риск насыщения' },
-  flopped: { label: 'провалилось', cls: '', note: 'снимали давно и не пробило' },
+  flopped: { label: 'не выстрелило', cls: '', note: 'снимали давно и не пробило' },
 };
 
 /* Список переживает уход на другой экран: двадцать идей набирают руками, и
@@ -566,7 +566,7 @@ function ideasResultBlock(res) {
         ${tile('Свободно', num(res.counts.free), 'никто не снимал')}
         ${tile('Снято недавно', num(res.counts.recent), 'пропустить')}
         ${tile('Спрос доказан', num(res.counts.proven), 'снимали давно и пробило')}
-        ${tile('Провалилось', num(res.counts.flopped), 'снимали давно и не пробило')}
+        ${tile('Не выстрелило', num(res.counts.flopped), 'снимали давно и не пробило')}
       </div>
       ${res.hint ? notice(esc(res.hint)) : ''}
       ${table([

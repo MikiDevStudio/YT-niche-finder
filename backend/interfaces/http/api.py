@@ -238,7 +238,7 @@ def top_tags_by_category(period: str = "7d", period_by: str = "published", niche
 
 
 @app.get("/api/outlier-channels")
-def outlier_channels(period: str = "24h", period_by: str = "discovered",
+def outlier_channels(period: str = "24h", period_by: str = "published",
                      min_multiplier: float = 2.0, max_subscribers: int = None,
                      min_subscribers: int = None,
                      niche: str = None, limit: int = 25, outlier_base: str = "rolling"):
@@ -287,7 +287,7 @@ def overview(period: str = "24h", niche: str = None, outlier_base: str = "rollin
         "coverage": trends.coverage(period),
         "stats": Q.db_stats(),
         "outlierChannels": T.recently_added_outlier_channels(
-            period=period, period_by="discovered", min_multiplier=1.5,
+            period=period, min_multiplier=1.5,
             niche=niche, limit=6, outlier_base=base),
         "competition": T.high_future_competition(period=wide, niche=niche, limit=6,
                                                  outlier_base=base),
@@ -614,6 +614,19 @@ def collect_niche(payload: dict = Body(...)):
         period=payload.get("period") or None,
         region=payload.get("region") or None,
         pages=int(payload.get("pages", 1)))
+
+
+@app.get("/api/fresh-status")
+def fresh_status():
+    """Ниши с сохранёнными запросами: когда свежее собиралось и сколько поисков стоит сбор."""
+    return {"niches": collector.fresh_status()}
+
+
+@app.post("/api/niches/{slug}/collect-fresh")
+def collect_fresh(slug: str):
+    """Свежее по нише: по одному поиску на запрос, с даты прошлого свежего сбора."""
+    _need_key()
+    return collector.collect_fresh(API_KEY, slug)
 
 
 @app.post("/api/refresh")

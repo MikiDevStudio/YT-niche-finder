@@ -72,5 +72,38 @@ def _run_all():
     sys.exit(0 if passed == len(tests) else 1)  # иначе CI зеленеет при упавших тестах
 
 
+def test_rows_without_baseline_do_not_dilute_base_rate():
+    rows = [
+        {"video_id": "a", "title": "garden hack", "tags": "[]", "views": 10, "outlier": 5.0},
+        {"video_id": "b", "title": "garden walk", "tags": "[]", "views": 10, "outlier": 1.0},
+        # unknown baseline: must not count as "did not break out"
+        {"video_id": "c", "title": "garden tour", "tags": "[]", "views": 10, "outlier": None},
+        {"video_id": "d", "title": "garden tour", "tags": "[]", "views": 10, "outlier": None},
+    ]
+    stats, total, base = K.aggregate(rows, use_tags=False, use_title=True, n_max=1,
+                                     outlier_threshold=3.0)
+    assert total == 4
+    assert base == 0.5, base                      # 1 hit of 2 known, not 1 of 4
+    assert stats["garden"]["known"] == 2
+    ranked = {r["keyword"]: r for r in K.score(stats, total, base, min_videos=1, collapse=False)}
+    assert ranked["tour"]["outlierLift"] is None  # nothing known about "tour"
+    assert ranked["tour"]["videos"] == 2          # but it is still counted for trends
+    assert ranked["garden"]["videosWithBaseline"] == 2
+
+
+def test_lift_needs_min_videos_with_a_known_baseline():
+    rows = [{"video_id": "k", "title": "rare phrase", "tags": "[]", "views": 10, "outlier": 5.0}]
+    rows += [{"video_id": f"u{i}", "title": "rare phrase", "tags": "[]", "views": 10,
+              "outlier": None} for i in range(5)]
+    rows += [{"video_id": f"b{i}", "title": "garden design", "tags": "[]", "views": 10,
+              "outlier": 1.0 if i else 5.0} for i in range(6)]
+    stats, total, base = K.aggregate(rows, use_tags=False, use_title=True, n_max=2,
+                                     outlier_threshold=3.0)
+    ranked = {r["keyword"]: r for r in K.score(stats, total, base, min_videos=3, collapse=False)}
+    assert ranked["rare phrase"]["videos"] == 6
+    assert ranked["rare phrase"]["outlierLift"] is None, ranked["rare phrase"]
+    assert ranked["garden design"]["outlierLift"] is not None
+
+
 if __name__ == "__main__":
     _run_all()

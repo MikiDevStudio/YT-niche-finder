@@ -12,6 +12,7 @@ Every collector returns a `quota` dict so the caller can see what it spent.
 """
 import json
 import re
+from datetime import timedelta
 import infrastructure.postgres as db
 import infrastructure.youtube.client as yt
 from domain import channel_refs as refs
@@ -193,6 +194,7 @@ def collect_niche(api_key: str, query: str, label: str = None, language: str = N
     conn = db.get_conn()
     try:
         db.upsert_niche(conn, slug, query, label or query)
+        db.add_niche_query(conn, slug, query, language, region)
         conn.commit()
 
         calls_today = search_calls_today(conn)
@@ -280,6 +282,163 @@ def _quota(search_calls, n_videos, n_channels, playlist_calls=0, other=0, calls_
                 "resetting at midnight Pacific Time; everything else shares "
                 "10,000 units/day",
     }
+
+
+# ------------------------------------------------------------- collect_fresh
+
+FRESH_FIRST_WINDOW_DAYS = 30
+FRESH_BACKFILL_VIDEOS = 30
+FRESH_MIN_OWN_UPLOADS = 4
+FRESH_STALE_DAYS = 3
+
+
+def _long_uploads_in_db(conn, channel_id: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM videos WHERE channel_id = ? "
+        "AND COALESCE(duration_seconds, 0) > ?", (channel_id, M.SHORTS_MAX_SECONDS)).fetchone()
+    return int(row[0])
+
+
+def _backfill(api_key: str, conn, channel_items, embed: bool) -> tuple:
+    """Pull recent uploads of channels that have no baseline of their own yet.
+
+    Without FRESH_MIN_OWN_UPLOADS long uploads a channel has no median, so its
+    fresh hit would not count as a breakout anywhere. ~1 unit per channel.
+    """
+    done, units = [], 0
+    for ch in channel_items:
+        cid = ch["id"]
+        if _long_uploads_in_db(conn, cid) >= FRESH_MIN_OWN_UPLOADS:
+            continue
+        playlist = ((ch.get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads")
+        if not playlist:
+            continue
+        entries, calls = yt.playlist_items(api_key, playlist, max_items=FRESH_BACKFILL_VIDEOS)
+        units += calls
+        ids = [e["video_id"] for e in entries]
+        if ids:
+            store_videos(conn, yt.videos_list(api_key, ids), embed=embed, now=db.now_iso())
+            units += (len(ids) + 49) // 50
+        conn.commit()
+        done.append(cid)
+    return done, units
+
+
+def collect_fresh(api_key: str, niche: str, embed: bool = True) -> dict:
+    """Re-run every stored query of a niche for videos published since its last fresh run.
+
+    One page (one of the 100 daily search calls) per query, ordered by date --
+    ordering by views would bring back the same old hits. The first fresh run of a
+    query looks FRESH_FIRST_WINDOW_DAYS back. Channels of the fresh videos that
+    have no baseline of their own get their recent uploads pulled in.
+
+    When the calls left today do not cover every query, the longest-unrefreshed
+    ones run and the rest are listed in `queriesSkipped`. `last_fresh_at` is
+    committed per query, so a run cut short keeps what it did.
+    """
+    slug = slugify(niche)
+    conn = db.get_conn()
+    try:
+        queries = db.niche_queries(conn, slug)
+        calls_today = search_calls_today(conn)
+        result = {"niche": slug, "queriesRun": [], "queriesSkipped": [],
+                  "videosStored": 0, "channelsBackfilled": [], "hint": None}
+        if not queries:
+            result["quota"] = _quota(0, 0, 0, calls_today=calls_today)
+            result["hint"] = (f"У ниши '{slug}' нет сохранённых запросов: она собрана из каналов. "
+                              "Добавьте запрос через collect_niche -- дальше свежее будет "
+                              "собираться по нему.")
+            return result
+
+        left = max(0, yt.SEARCH_DAILY_CALL_LIMIT - calls_today)
+        todo, result["queriesSkipped"] = queries[:left], [q["query"] for q in queries[left:]]
+        search_calls, n_videos, n_channels, units = 0, 0, 0, 0
+        backfilled, units_out = [], False
+        for i, q in enumerate(todo):
+            last = P.parse_iso(q["last_fresh_at"])
+            since = P.to_rfc3339(last or P.now() - timedelta(days=FRESH_FIRST_WINDOW_DAYS))
+            started = db.now_iso()
+            try:
+                resp = yt.search_videos(api_key, q["query"], published_after=since,
+                                        relevance_language=q["language"],
+                                        region_code=q["region"], order="date")
+            except yt.QuotaExceeded:
+                result["queriesSkipped"] = [x["query"] for x in todo[i:]] + result["queriesSkipped"]
+                break
+            search_calls += 1
+            calls_today = _record_search_calls(conn, 1)
+            conn.commit()   # the call is spent whatever happens next
+            ids = list(dict.fromkeys(
+                (it.get("id") or {}).get("videoId") for it in resp.get("items", [])
+                if (it.get("id") or {}).get("videoId")))
+            try:
+                chans = []
+                if ids:
+                    items = yt.videos_list(api_key, ids)
+                    cids = [c for c in {(v.get("snippet") or {}).get("channelId")
+                                        for v in items} if c]
+                    chans = yt.channels_list(api_key, cids) if cids else []
+                    store_channels(conn, chans, db.now_iso())
+                    result["videosStored"] += store_videos(conn, items, slug, q["region"],
+                                                           embed, db.now_iso())
+                    n_videos += len(ids)
+                    n_channels += len(cids)
+                # Backfill before the query is marked fresh: the next run searches
+                # only from last_fresh_at, so channels left out now are never seen again.
+                done, calls = _backfill(api_key, conn,
+                                        [c for c in chans if c["id"] not in backfilled], embed)
+            except yt.QuotaExceeded:
+                conn.commit()   # keep what was stored; the query stays unrefreshed
+                result["queriesSkipped"] = [x["query"] for x in todo[i:]] + result["queriesSkipped"]
+                units_out = True
+                break
+            backfilled += done
+            units += calls
+            db.mark_query_fresh(conn, slug, q["query"], started)
+            conn.commit()
+            result["queriesRun"].append({"query": q["query"], "since": since,
+                                         "videosFound": len(ids)})
+
+        result["channelsBackfilled"] = backfilled
+        if result["queriesRun"]:
+            db.upsert_niche(conn, slug, None, slug)   # bumps last_collected_at
+            conn.commit()
+        result["quota"] = _quota(search_calls, n_videos, n_channels, other=units,
+                                 calls_today=calls_today)
+        if units_out:
+            result["hint"] = (f"Кончилась общая квота YouTube (10 000 units в сутки): пропущено "
+                              f"{len(result['queriesSkipped'])} запросов, начиная с "
+                              f"'{result['queriesSkipped'][0]}'. Уже сделанное сохранено; "
+                              f"пропущенные пойдут первыми при следующем сборе.")
+        elif result["queriesSkipped"]:
+            result["hint"] = (f"Поисков на сегодня не хватило: пропущено "
+                              f"{len(result['queriesSkipped'])} запросов. Они пойдут первыми "
+                              f"при следующем сборе (лимит сбрасывается в полночь по Тихоокеанскому).")
+        return result
+    finally:
+        conn.close()
+
+
+def fresh_status() -> list:
+    """Per niche with stored queries: how stale its fresh data is and what a run costs."""
+    conn = db.get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT niche_slug, COUNT(*) AS n, MIN(last_fresh_at) AS oldest, "
+            "SUM(CASE WHEN last_fresh_at IS NULL THEN 1 ELSE 0 END) AS never "
+            "FROM niche_queries GROUP BY niche_slug ORDER BY niche_slug").fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        oldest = None if r["never"] else P.parse_iso(r["oldest"])
+        days = round((P.now() - oldest).total_seconds() / 86400, 1) if oldest else None
+        out.append({"niche": r["niche_slug"], "queries": r["n"],
+                    "lastFreshAt": r["oldest"] if oldest else None,
+                    "staleDays": days,
+                    "stale": days is None or days > FRESH_STALE_DAYS,
+                    "searchCost": r["n"]})
+    return out
 
 
 # --------------------------------------------------------- collect_trending

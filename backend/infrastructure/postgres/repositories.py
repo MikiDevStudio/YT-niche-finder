@@ -127,6 +127,31 @@ def upsert_niche(conn, slug: str, query: str, label: str):
     )
 
 
+def add_niche_query(conn, slug: str, query: str, language: str = None, region: str = None):
+    """Remember a search query of a niche. Re-adding keeps the first language/region."""
+    conn.execute(
+        "INSERT INTO niche_queries (niche_slug, query, language, region, created_at) "
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT (niche_slug, query) DO NOTHING",
+        (slug, query, language, region, now_iso()),
+    )
+
+
+def niche_queries(conn, slug: str) -> list:
+    """Queries of a niche, the longest-unrefreshed first."""
+    rows = conn.execute(
+        "SELECT niche_slug, query, language, region, created_at, last_fresh_at "
+        "FROM niche_queries WHERE niche_slug = ? "
+        "ORDER BY (last_fresh_at IS NOT NULL), last_fresh_at, created_at, query",
+        (slug,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_query_fresh(conn, slug: str, query: str, ts: str):
+    conn.execute("UPDATE niche_queries SET last_fresh_at = ? WHERE niche_slug = ? AND query = ?",
+                 (ts, slug, query))
+
+
 def track_channel(conn, channel_id: str, note: str = None):
     conn.execute(
         "INSERT INTO tracked_channels (channel_id, note, added_at, active) VALUES (?,?,?,1) "

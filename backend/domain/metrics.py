@@ -128,6 +128,51 @@ def outlier_band(score) -> str | None:
     return "mega outlier"
 
 
+# ------------------------------------------------------------ breakouts
+
+BREAKOUT_HIT_THRESHOLD = 2.0
+_YOUTH_STEPS = ((180, 2.0), (365, 1.5), (1095, 1.0))
+_YOUTH_OLD = 0.6
+
+
+def effective_outlier(row: dict, age_adjusted: bool = True):
+    """The one multiplier every section filters, ranks and counts hits on.
+
+    Only baselines built from the channel's OWN uploads count. When the
+    channel has too few of them in the database the answer is None --
+    "unknown" -- never the NexLev lifetime mean: on a channel with thousands of
+    weak uploads that mean turns any single old hit into hundreds of x.
+    """
+    keys = ("outlierScoreAgeAdjusted", "outlierScore") if age_adjusted else ("outlierScore",)
+    for key in keys:
+        value = row.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def youth_factor(age_days) -> float:
+    """Bonus for young channels: a six-month-old channel doing well is the
+    signal we are looking for, an established one is competition we know."""
+    if age_days is None:
+        return 1.0
+    for limit, factor in _YOUTH_STEPS:
+        if age_days < limit:
+            return factor
+    return _YOUTH_OLD
+
+
+def breakout_score(multipliers, youth: float,
+                   hit_threshold: float = BREAKOUT_HIT_THRESHOLD) -> float:
+    """Sum of log2(multiplier) over the hits, times the youth bonus.
+
+    log2 makes a series of hits weigh as much as one mega hit (3 x 4x == 1 x 64x),
+    so a lucky one-off no longer outranks a channel that keeps breaking out.
+    """
+    total = sum(math.log2(m) for m in multipliers if m is not None and m >= hit_threshold)
+    return round(total * youth, 3)
+
+
 # ------------------------------------------------------- age normalisation
 
 # Share of a video's 30-day views typically accumulated by day t (long-form).

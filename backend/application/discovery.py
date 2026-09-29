@@ -324,8 +324,10 @@ def viral_videos_small_channels(period="7d", period_by="published",
         funnel.append((f"views per subscriber >= {min_views_per_subscriber}", len(rows),
                        "min_views_per_subscriber"))
     if min_outlier_score is not None:
+        rows = [r for r in rows if M.effective_outlier(r, age_adjusted=False) is not None]
+        funnel.append(("channel baseline known", len(rows), "baseline"))
         rows = [r for r in rows
-                if (r["outlierScore"] or r["outlierScoreNexlev"] or 0) >= min_outlier_score]
+                if M.effective_outlier(r, age_adjusted=False) >= min_outlier_score]
         funnel.append((f"outlier score >= {min_outlier_score}", len(rows),
                        "min_outlier_score"))
 
@@ -363,6 +365,10 @@ def _funnel_hint(funnel, period, period_by):
                 f"period_by='discovered', если видео старые, а в базу попали недавно.")
     # first step that reached zero
     for i, (name, n, param) in enumerate(funnel):
+        if n == 0 and param == "baseline":
+            return ("Ни у одного канала в окне нет своей нормы: в базе меньше 4 его роликов. "
+                    "Соберите свежее по нише (кнопка «Собрать свежее») или загрузите канал "
+                    "через collect_channel -- это ~1 unit на 50 видео.")
         if n == 0:
             before = funnel[i - 1][1]
             return (f"Фильтр '{name}' отсёк все {before} видео. Понизьте {param} "
@@ -573,7 +579,7 @@ def trending_keywords(period="7d", period_by="published", niche=None, region=Non
     def shape(rs):
         return [{"video_id": r["video_id"], "title": r["title"], "tags": r["tags"],
                  "views": r["view_count"] or 0,
-                 "outlier": r["outlierScore"] or r["outlierScoreNexlev"]} for r in rs]
+                 "outlier": M.effective_outlier(r, age_adjusted=False)} for r in rs]
 
     use_tags = source in ("tags", "both")
     use_title = source in ("titles", "both")
@@ -598,6 +604,8 @@ def trending_keywords(period="7d", period_by="published", niche=None, region=Non
     return {
         "period": period,
         "periodBy": period_by,
+        "videosWithoutBaseline": sum(1 for r in rows
+                                     if M.effective_outlier(r, age_adjusted=False) is None),
         "videosAnalysed": total,
         "previousWindowVideos": prev_total,
         "outlierBase": outlier_base,
@@ -642,7 +650,7 @@ def top_tags_by_category(period="7d", period_by="published", niche=None, region=
     def shape(rs):
         return [{"video_id": r["video_id"], "title": r["title"], "tags": r["tags"],
                  "views": r["view_count"] or 0,
-                 "outlier": r["outlierScore"] or r["outlierScoreNexlev"]} for r in rs]
+                 "outlier": M.effective_outlier(r, age_adjusted=False)} for r in rs]
 
     categories = []
     for cid, rs in by_category.items():
@@ -665,6 +673,8 @@ def top_tags_by_category(period="7d", period_by="published", niche=None, region=
     return {
         "period": period,
         "periodBy": period_by,
+        "videosWithoutBaseline": sum(1 for r in rows
+                                     if M.effective_outlier(r, age_adjusted=False) is None),
         "outlierBase": outlier_base,
         "minVideos": min_videos,
         "topN": top_n,

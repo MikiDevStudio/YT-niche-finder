@@ -78,6 +78,29 @@ def collect_niche(query: str, label: str = None, language: str = None,
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=False, destructive_hint=False,
     idempotent_hint=False, open_world_hint=True))
+def collect_fresh(niche: str) -> dict:
+    """Collect videos a niche published since its last fresh run.
+
+    COSTS ONE OF YOUR 100 DAILY SEARCH CALLS PER STORED QUERY of the niche
+    (fresh_status shows the cost first). Searches by date, not views, so the
+    result is what came out recently; channels of fresh videos without enough
+    uploads in the database are backfilled (~1 unit each) so their hits count.
+    """
+    _require_key()
+    return collector.collect_fresh(API_KEY, niche)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def fresh_status() -> list:
+    """Niches with stored queries: days since the last fresh run and its search cost."""
+    return collector.fresh_status()
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def collect_trending(regions: list = None, category_ids: list = None,
                      pages: int = 2) -> dict:
     """Snapshot YouTube's own mostPopular chart into the local DB. 1 unit/page.
@@ -325,20 +348,23 @@ def top_tags_by_category(period: str = "7d", period_by: str = "published",
     read_only_hint=True, destructive_hint=False,
     idempotent_hint=True, open_world_hint=False))
 def recently_added_outlier_channels(period: str = "24h",
-                                    period_by: str = "discovered",
+                                    period_by: str = "published",
                                     min_multiplier: float = 2.0,
                                     max_subscribers: int = None,
                                     min_subscribers: int = None,
                                     niche: str = None, category_id: str = None,
                                     region: str = None, exclude_shorts: bool = True,
                                     limit: int = 25, outlier_base: str = "rolling") -> dict:
-    """Channels that entered the corpus recently AND are outperforming. FREE.
+    """Channels breaking out now: their videos in the window beat the median of
+    the channel's own uploads. FREE.
 
-    The channel-level counterpart to viral_videos_small_channels: instead of a
-    single breakout video it ranks whole channels by their best age-adjusted
-    multiplier, with a 0-4 strength band (<2x, 2-3x, 3-5x, 5-10x, >10x).
-    Defaults to period_by="discovered" because "recently added" is about when we
-    first saw the channel, not when it last uploaded.
+    The channel-level counterpart to viral_videos_small_channels. Ranked by
+    breakoutScore = sum of log2(multiplier) over the channel's hits (>=2x) in the
+    window, times youthFactor (<180 days x2, <1 year x1.5, <3 years x1, older x0.6).
+    Channels with too few uploads in the database for a median of their own are
+    left out and counted in channelsWithoutBaseline.
+    period_by: 'published' (default) -- videos that came out in the window;
+    'discovered' -- videos we first stored in the window (NexLev parity, shows old hits).
     outlier_base: "rolling" (default) or "period", see search_outliers."""
     return T.recently_added_outlier_channels(
         period=period, period_by=period_by, min_multiplier=min_multiplier,

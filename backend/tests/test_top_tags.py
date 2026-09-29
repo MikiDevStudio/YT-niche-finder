@@ -63,9 +63,22 @@ sys.modules["infrastructure.postgres"] = fake_db
 import application.discovery as trends  # noqa: E402
 
 
+def _add_history(ch, views=500_000, days_ago=200):
+    """Three older long-form uploads: the channel's own median baseline."""
+    for i in range(3):
+        RAW.execute(
+            "INSERT OR REPLACE INTO videos (video_id, channel_id, title, tags, published_at,"
+            " view_count, duration_seconds, is_short, category_id)"
+            " VALUES (?,?,?,?,?,?,600,0,?)",
+            (f"{ch}-h{i}", ch, "older upload", "[]",
+             iso(NOW - timedelta(days=days_ago + i)), views, "0"))
+
+
 def _add_video(vid, category_id, tags, views, ch_view_count=40_000_000,
-               ch_video_count=80, days_ago=10):
+               ch_video_count=80, days_ago=10, history=True):
     ch = f"UC{vid}0000000000000"
+    if history:
+        _add_history(ch, ch_view_count // ch_video_count)
     RAW.execute(
         "INSERT OR REPLACE INTO channels (channel_id, title, custom_url,"
         " subscriber_count, video_count, view_count) VALUES (?,?,?,?,?,?)",
@@ -168,6 +181,19 @@ def _run_all():
             print(f"ERROR {name}: {e!r}")
     print(f"\n{passed}/{len(tests)} прошло")
     sys.exit(0 if passed == len(tests) else 1)  # иначе CI зеленеет при упавших тестах
+
+
+def test_single_old_hit_without_channel_history_has_no_lift():
+    """Rusty78609 shape: one stored video, a huge channel with a tiny mean.
+    With the NexLev fallback it was a 'hit'; now its baseline is unknown."""
+    reset()
+    _add_video("lonely", "22", ["tiny home"], views=13_900_000,
+               ch_view_count=57_700_000, ch_video_count=9951, history=False)
+    res = trends.top_tags_by_category(period="30d", min_videos=1)
+    cat = next(c for c in res["categories"] if c["categoryId"] == "22")
+    tag = next(t for t in cat["tags"] if t["tag"] == "tiny home")
+    assert tag["outlierLift"] is None, tag
+    assert res["videosWithoutBaseline"] == 1
 
 
 if __name__ == "__main__":

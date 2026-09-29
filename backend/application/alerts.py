@@ -79,8 +79,7 @@ def scan(outlier_threshold: float = A.OUTLIER_THRESHOLD_DEFAULT,
     snap_at = _latest_snapshot_at(conn, [r["video_id"] for r in rows])
     outlier_rows = [{"video_id": r["video_id"], "title": r["title"],
                      "channel_id": r["channel_id"], "view_count": r["view_count"],
-                     "outlier_score": (r.get("outlierScoreAgeAdjusted")
-                                       or r.get("outlierScore") or r.get("outlierScoreNexlev"))}
+                     "outlier_score": M.effective_outlier(r)}
                     for r in rows]
     accel_rows = [{"video_id": r["video_id"], "title": r["title"],
                    "channel_id": r["channel_id"], "acceleration": r.get("acceleration"),

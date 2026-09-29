@@ -253,6 +253,28 @@ def test_tag_routes_reject_bad_input_with_400():
     assert bad_base.status_code == 400
 
 
+def test_fresh_status_and_collect_fresh_endpoints():
+    conn = db.get_conn()
+    db.add_niche_query(conn, "http-fresh", "http query", "en")
+    conn.commit()
+    conn.close()
+    r = client.get("/api/fresh-status")
+    assert r.status_code == 200
+    row = next(n for n in r.json()["niches"] if n["niche"] == "http-fresh")
+    assert row["stale"] is True and row["searchCost"] == 1
+
+    import application.collecting as collector
+    seen = {}
+    orig, key = collector.collect_fresh, api.API_KEY
+    collector.collect_fresh = lambda k, niche, **kw: seen.setdefault("niche", niche) and {"niche": niche}
+    api.API_KEY = "test-key"
+    try:
+        r = client.post("/api/niches/http-fresh/collect-fresh")
+    finally:
+        collector.collect_fresh, api.API_KEY = orig, key
+    assert r.status_code == 200 and seen["niche"] == "http-fresh"
+
+
 if __name__ == "__main__":
     setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

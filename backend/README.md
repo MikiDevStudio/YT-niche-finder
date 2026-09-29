@@ -31,7 +31,10 @@ internal notes, not included in this repository.
 
 Search is scarce, reading is nearly free. So:
 
-- `collect_niche` — the only one that spends search. Use it for new topics.
+- `collect_niche` — spends search. Use it for new topics; every query is
+  remembered per niche (`niche_queries`).
+- `collect_fresh` — re-runs a niche's stored queries ordered by date, from the
+  last fresh run: **1 search per query**, one page each.
 - `collect_channel` — goes through the uploads playlist: **1 unit per 50
   videos**, no 500-result cap, doesn't touch search. The main way to build
   up the corpus.
@@ -265,6 +268,8 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | Tool | What it does | Cost |
 |---|---|---|
 | `collect_niche` | search by topic → videos + channels + embeddings into the database. `period="24h"` instead of a manual date | 1 search/page out of 100 a day |
+| `collect_fresh` | what a niche published since its last fresh run: every stored query, `order=date`, one page; channels of fresh videos with fewer than 4 long uploads in the database get their last 30 uploads pulled in, so their hits have a baseline | 1 search per stored query |
+| `fresh_status` | per niche: stored queries, days since the last fresh run, the search cost of the next one | free |
 | `collect_channel` | a channel's uploads via its uploads playlist; accepts a UC id, @handle, or URL | ~1 unit / 50 videos |
 | `collect_trending` | a snapshot of the mostPopular chart (Music/Movies/Gaming) | ~1 unit / page |
 | `refresh_stats` | re-read counters and append a snapshot — this is where velocity numbers come from | ~1 unit / 50 videos |
@@ -276,7 +281,7 @@ separately (or via cron), otherwise the velocity fields stay empty.
 | Tool | What it gives you |
 |---|---|
 | `viral_videos_small_channels` | viral videos on small channels over a period; VSR, age-adjusted outlier, VPH, acceleration |
-| `recently_added_outlier_channels` | the same, at the channel level: multiplier + strength band 0–4 |
+| `recently_added_outlier_channels` | channels breaking out now («Каналы на взлёте»): videos published in the window against the channel's own median, ranked by `breakoutScore`; channels without a median of their own are left out |
 | `high_future_competition` | young, fast-growing channels about to become your competitors |
 | `most_popular_categories` | category ranking over a period + share shift vs. the previous window; `rank_by="views"` or `"channels"` |
 | `trending_keywords` | growing phrases with momentum and outlier-lift |
@@ -489,12 +494,17 @@ trending_keywords(period="24h", sort_by="trend")
 niche_overview(niche="brain")
 ```
 
-**Ongoing — keep the worker running.** After a day, `vph24h` and
+**Ongoing — collect fresh every few days.** The niche page has a «Собрать
+свежее (N поисков)» button (`collect_fresh`): one search per stored query,
+from the last fresh run, so days the project was switched off are not lost.
+The overview flags niches not refreshed for more than 3 days.
+
+**Keep the worker running while the project is up.** After a day, `vph24h` and
 `viewsGained24h` show up; after a week, channel growth and `momentum`;
 after a month, `calibrate_maturity_curve()` recomputes the curve for your
 niches.
 
-To have topics refresh themselves, set in `.env`:
+Optionally, to have topics searched daily while the worker runs, set in `.env`:
 
 ```
 WORKER_QUERIES=ai automation,faceless history,ai for business
@@ -539,7 +549,7 @@ outlierScorePeriod  = views / median views of the channel's long-form uploads wi
                       window -> the channel median, baselinePeriodScope="channel")
 outlierScore        = one of the two, picked by outlier_base="rolling" (default) | "period"
 outlierScoreAdjusted= views / (baseline * maturity(age in days))
-outlierScoreNexlev  = views / (channel.viewCount // channel.videoCount)   # to cross-check against NexLev
+outlierScoreNexlev  = views / (channel.viewCount // channel.videoCount)   # reference only, to cross-check against NexLev
 viewsPerSubscriber  = views / subscribers
 viralScore          = 30-day view projection / subscribers
 vphLifetime         = views / hours since publish          # this is what NexLev's UI calls "VPH"
@@ -552,6 +562,21 @@ revenue             = monthly views / 1000 * niche RPM * 0.70
 Median instead of mean is deliberate: NexLev's baseline is the channel's
 lifetime mean, and a single viral video wrecks it (the observed
 mean-to-median ratio runs as high as 27x).
+
+`outlierScoreNexlev` is never a fallback. When a channel has too few uploads
+in the database for a median, its videos have no multiplier (`None` = unknown):
+they do not pass `min_outlier_score`, do not enter keyword/tag lift (responses
+count them in `videosWithoutBaseline`), raise no alert and do not rank as a
+breakout. `domain.metrics.effective_outlier` is the one rule every section uses.
+
+Channels breaking out now are ranked by
+
+```
+breakoutScore = sum(log2(m) for each video in the window with m >= 2) * youthFactor
+youthFactor   = x2 under 180 days, x1.5 under a year, x1 under 3 years, x0.6 older
+```
+
+so a series of hits weighs as much as one mega hit (3 x 4x = 1 x 64x).
 
 The two medians answer different questions. Rolling asks "better than what
 the channel did just before?", so a video that follows a hot streak looks like

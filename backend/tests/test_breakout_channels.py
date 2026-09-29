@@ -159,6 +159,15 @@ def test_best_video_carries_its_topic_tags():
     assert best["tags"] == [{"group": "garden_topic", "tag": "perennials"}]
 
 
+def test_best_time_ignores_videos_without_a_baseline():
+    reset()
+    channel("UCnobase", created_days_ago=400)
+    video("vnobase", "UCnobase", days_ago=5, views=5_000_000)   # VSR 100, no own median
+    RAW.commit()
+    res = T.best_time_to_publish(period="30d", min_samples=1)
+    assert res["heatmap"] == [], res
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -1107,6 +1107,68 @@ def test_collect_fresh_tool_calls_the_use_case(monkeypatch):
     assert isinstance(srv.fresh_status(), list)
 
 
+def test_collect_fresh_backfills_before_marking_a_query_fresh(monkeypatch):
+    """The shared 10k pool running out after a search must not lose the backfill
+    of queries already marked fresh, nor surface as a bare 429."""
+    slug = "fresh-e"
+    _no_network(monkeypatch)
+    conn = db.get_conn()
+    for q in ("e1", "e2"):
+        db.add_niche_query(conn, slug, q, "en")
+    conn.commit()
+    conn.close()
+    cid = "UCfreshpartial00000001"
+    monkeypatch.setattr(yt, "search_videos",
+                        lambda k, query, **kw: {"items": [{"id": {"videoId": f"vpart{query}"}}]})
+    state = {"n": 0}
+
+    def videos(k, ids, **kw):
+        if any(i.startswith("vparte2") for i in ids):
+            raise yt.QuotaExceeded("units pool empty")
+        return [_api_video(v, cid) for v in ids]
+
+    monkeypatch.setattr(yt, "videos_list", videos)
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, uploads="UUfreshpartial")])
+    monkeypatch.setattr(yt, "playlist_items",
+                        lambda k, pl, max_items=200: ([{"video_id": f"vpartbf{i}"} for i in range(4)], 1))
+
+    out = collector.collect_fresh("test-key", slug, embed=False)
+    assert [q["query"] for q in out["queriesRun"]] == ["e1"]
+    assert out["queriesSkipped"] == ["e2"]
+    assert out["channelsBackfilled"] == [cid]
+    assert out["hint"]
+    conn = db.get_conn()
+    fresh = {r["query"]: r["last_fresh_at"] for r in db.niche_queries(conn, slug)}
+    conn.close()
+    assert fresh["e1"] is not None and fresh["e2"] is None
+
+
+def test_collect_fresh_counts_a_search_even_when_a_later_step_fails(monkeypatch):
+    slug = "fresh-f"
+    _no_network(monkeypatch)
+    conn = db.get_conn()
+    db.add_niche_query(conn, slug, "f1", "en")
+    before = collector.search_calls_today(conn)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(yt, "search_videos",
+                        lambda k, query, **kw: {"items": [{"id": {"videoId": "vfailafter"}}]})
+
+    def broken(k, ids, **kw):
+        raise RuntimeError("YouTube API 500")
+
+    monkeypatch.setattr(yt, "videos_list", broken)
+    try:
+        collector.collect_fresh("test-key", slug, embed=False)
+    except RuntimeError:
+        pass
+    conn = db.get_conn()
+    after = collector.search_calls_today(conn)
+    conn.close()
+    assert after == before + 1, (before, after)
+
+
 if __name__ == "__main__":
     setup_module()
 

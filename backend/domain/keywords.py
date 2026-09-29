@@ -210,7 +210,10 @@ def score(stats, total_videos, base_rate, prev_stats=None, prev_total=0,
         p_prev = (prev_count + 0.5) / (prev_total + 1) if prev_total else None
         momentum = round(min(p_now / p_prev, 99.0), 2) if p_prev else None
         known = s.get("known", s["videos"])
-        hit_rate = (s["hits"] / known) if known else None
+        # A hit rate over one or two judged videos is noise, and the overview
+        # ranks by trendScore, which multiplies by lift: the same floor as for
+        # the phrase itself.
+        hit_rate = (s["hits"] / known) if known >= max(min_videos, 1) else None
         lift = round(hit_rate / base_rate, 2) if hit_rate is not None and base_rate > 0 else None
         med_views = int(st.median(s["view_list"])) if s["view_list"] else 0
         med_outlier = round(st.median(s["outliers"]), 2) if s["outliers"] else None

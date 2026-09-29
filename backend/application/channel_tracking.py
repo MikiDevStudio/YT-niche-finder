@@ -419,8 +419,8 @@ def best_time_to_publish(niche: str = None, channel_id: str = None, period: str 
             continue
         ts = ts.timestamp() + timezone_offset_hours * 3600
         ts = datetime.fromtimestamp(ts, tz=timezone.utc)
-        score = r["outlierScoreAgeAdjusted"] or r["outlierScore"] or r["viewsPerSubscriber"]
-        if score:
+        score = M.effective_outlier(r)
+        if score is not None:
             buckets[(ts.weekday(), ts.hour)].append(score)
 
     scored = {k: st.median(v) for k, v in buckets.items() if len(v) >= min_samples}

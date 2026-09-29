@@ -91,5 +91,19 @@ def test_rows_without_baseline_do_not_dilute_base_rate():
     assert ranked["garden"]["videosWithBaseline"] == 2
 
 
+def test_lift_needs_min_videos_with_a_known_baseline():
+    rows = [{"video_id": "k", "title": "rare phrase", "tags": "[]", "views": 10, "outlier": 5.0}]
+    rows += [{"video_id": f"u{i}", "title": "rare phrase", "tags": "[]", "views": 10,
+              "outlier": None} for i in range(5)]
+    rows += [{"video_id": f"b{i}", "title": "garden design", "tags": "[]", "views": 10,
+              "outlier": 1.0 if i else 5.0} for i in range(6)]
+    stats, total, base = K.aggregate(rows, use_tags=False, use_title=True, n_max=2,
+                                     outlier_threshold=3.0)
+    ranked = {r["keyword"]: r for r in K.score(stats, total, base, min_videos=3, collapse=False)}
+    assert ranked["rare phrase"]["videos"] == 6
+    assert ranked["rare phrase"]["outlierLift"] is None, ranked["rare phrase"]
+    assert ranked["garden design"]["outlierLift"] is not None
+
+
 if __name__ == "__main__":
     _run_all()

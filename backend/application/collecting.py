@@ -353,7 +353,7 @@ def collect_fresh(api_key: str, niche: str, embed: bool = True) -> dict:
         left = max(0, yt.SEARCH_DAILY_CALL_LIMIT - calls_today)
         todo, result["queriesSkipped"] = queries[:left], [q["query"] for q in queries[left:]]
         search_calls, n_videos, n_channels, units = 0, 0, 0, 0
-        channels_seen = {}
+        backfilled, units_out = [], False
         for i, q in enumerate(todo):
             last = P.parse_iso(q["last_fresh_at"])
             since = P.to_rfc3339(last or P.now() - timedelta(days=FRESH_FIRST_WINDOW_DAYS))
@@ -367,33 +367,50 @@ def collect_fresh(api_key: str, niche: str, embed: bool = True) -> dict:
                 break
             search_calls += 1
             calls_today = _record_search_calls(conn, 1)
+            conn.commit()   # the call is spent whatever happens next
             ids = list(dict.fromkeys(
                 (it.get("id") or {}).get("videoId") for it in resp.get("items", [])
                 if (it.get("id") or {}).get("videoId")))
-            if ids:
-                items = yt.videos_list(api_key, ids)
-                cids = [c for c in {(v.get("snippet") or {}).get("channelId") for v in items} if c]
-                chans = yt.channels_list(api_key, cids) if cids else []
-                store_channels(conn, chans, db.now_iso())
-                result["videosStored"] += store_videos(conn, items, slug, q["region"], embed,
-                                                       db.now_iso())
-                n_videos += len(ids)
-                n_channels += len(cids)
-                for c in chans:
-                    channels_seen[c["id"]] = c
+            try:
+                chans = []
+                if ids:
+                    items = yt.videos_list(api_key, ids)
+                    cids = [c for c in {(v.get("snippet") or {}).get("channelId")
+                                        for v in items} if c]
+                    chans = yt.channels_list(api_key, cids) if cids else []
+                    store_channels(conn, chans, db.now_iso())
+                    result["videosStored"] += store_videos(conn, items, slug, q["region"],
+                                                           embed, db.now_iso())
+                    n_videos += len(ids)
+                    n_channels += len(cids)
+                # Backfill before the query is marked fresh: the next run searches
+                # only from last_fresh_at, so channels left out now are never seen again.
+                done, calls = _backfill(api_key, conn,
+                                        [c for c in chans if c["id"] not in backfilled], embed)
+            except yt.QuotaExceeded:
+                conn.commit()   # keep what was stored; the query stays unrefreshed
+                result["queriesSkipped"] = [x["query"] for x in todo[i:]] + result["queriesSkipped"]
+                units_out = True
+                break
+            backfilled += done
+            units += calls
             db.mark_query_fresh(conn, slug, q["query"], started)
             conn.commit()
             result["queriesRun"].append({"query": q["query"], "since": since,
                                          "videosFound": len(ids)})
 
-        backfilled, units = _backfill(api_key, conn, list(channels_seen.values()), embed)
         result["channelsBackfilled"] = backfilled
         if result["queriesRun"]:
             db.upsert_niche(conn, slug, None, slug)   # bumps last_collected_at
             conn.commit()
         result["quota"] = _quota(search_calls, n_videos, n_channels, other=units,
                                  calls_today=calls_today)
-        if result["queriesSkipped"]:
+        if units_out:
+            result["hint"] = (f"Кончилась общая квота YouTube (10 000 units в сутки): пропущено "
+                              f"{len(result['queriesSkipped'])} запросов, начиная с "
+                              f"'{result['queriesSkipped'][0]}'. Уже сделанное сохранено; "
+                              f"пропущенные пойдут первыми при следующем сборе.")
+        elif result["queriesSkipped"]:
             result["hint"] = (f"Поисков на сегодня не хватило: пропущено "
                               f"{len(result['queriesSkipped'])} запросов. Они пойдут первыми "
                               f"при следующем сборе (лимит сбрасывается в полночь по Тихоокеанскому).")

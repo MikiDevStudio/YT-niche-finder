@@ -211,13 +211,19 @@ async function viewOverview() {
   const d = await api(`/api/overview${q(base())}`);
   const cov = d.coverage;
   const thin = cov.videosPublishedInPeriod < 5;
+  let stale = [];
+  try { stale = (await api('/api/fresh-status')).niches.filter((n) => n.stale); } catch { /* баннер не обязателен */ }
+  const staleBanner = stale.length
+    ? notice(`<div>Свежее давно не собиралось: ${stale.map((n) => `<a href="#/niche/${encodeURIComponent(n.niche)}">${esc(n.niche)}</a> (${
+        n.staleDays == null ? 'ни разу' : `${Math.round(n.staleDays)} дн.`})`).join(', ')}. Кнопка — на странице ниши.</div>`)
+    : '';
 
   view.innerHTML = `
+    ${staleBanner}
     ${thin ? notice(`За окно ${plabel(state.period)} в базе всего
       <b>${cov.videosPublishedInPeriod}</b> видео из ${num(cov.videosTotal)}.
-      Outlier-каналы ниже считаются по окну «когда мы впервые увидели», поэтому что-то показывают,
-      а вирусные видео — только то, что вышло в этом окне. Для честной картины нужно собрать
-      больше каналов — это дёшево, ≈1 unit на 50 видео.`) : ''}
+      Разделы «что стреляет» считаются по дате публикации, поэтому им нужны свежие ролики —
+      соберите свежее по нишам.`) : ''}
 
     <div class="tiles">
       ${tile('Каналов', num(d.stats.channels))}
@@ -231,7 +237,7 @@ async function viewOverview() {
 
     <div class="grid-2">
       <section class="card">
-        ${sectionHead('Недавно добавленные outlier-каналы', plabel(state.period),
+        ${sectionHead('Каналы на взлёте', plabel(state.period),
           '<a class="btn btn-ghost btn-sm" href="#/channels">Все</a>')}
         ${d.outlierChannels.channels.length
           ? `<div class="rows">${d.outlierChannels.channels.map(channelRow).join('')}</div>`
@@ -361,7 +367,7 @@ async function viewViral() {
   });
 }
 
-/* --------------------------------------------------------- Outlier-каналы */
+/* ------------------------------------------------------- Каналы на взлёте */
 
 async function viewChannels() {
   const p = Object.assign(
@@ -374,7 +380,7 @@ async function viewChannels() {
   })}`);
   view.innerHTML = `
     <div class="card">
-      ${sectionHead('Outlier-каналы', `${plabel(state.period)} · по попаданию в базу — свежие возможности`)}
+      ${sectionHead('Каналы на взлёте', `${plabel(state.period)} · по дате публикации`)}
       <div class="form-row">
         <label class="field"><span class="field-label">Множитель не меньше</span>
           <input type="number" id="fcMult" value="${p.min_multiplier}" step="0.5"></label>
@@ -384,10 +390,10 @@ async function viewChannels() {
           <input type="number" id="fcMaxSubs" value="${p.max_subscribers}" step="1000"></label>
         <button class="btn" id="applyChannels" type="button">Применить</button>
       </div>
-      <div class="section-sub" style="margin-top:10px">Множитель — лучший возрастно-нормированный outlier среди
-        видео канала в окне, против медианы предыдущих загрузок этого же канала.
-        Полоса: &lt;2x, 2–3x, 3–5x, 5–10x, &gt;10x. Отсортировано по силе множителя;
-        сузьте окно периода вверху, чтобы увидеть только самые свежие открытия.</div>
+      <div class="section-sub" style="margin-top:10px">Каналы, чьи ролики вышли в этом окне и пробили норму
+        самого канала (медиана его прошлых загрузок). Рейтинг — сумма log2 множителей по хитам, так что серия
+        хитов весит как один мега-хит; молодые каналы получают бонус: до полугода ×2, до года ×1,5.
+        Каналы, у которых в базе меньше 4 роликов, не показываются — их догружает «Собрать свежее».</div>
     </div>
     <div class="card">
       ${d.channels.length ? `<div class="rows">${d.channels.map(channelRow).join('')}</div>`
@@ -1157,6 +1163,12 @@ async function viewNiche(slug) {
     api(`/api/niches/${encodeURIComponent(slug)}/tags`),
   ]);
   if (!d.found && !pts.videoCount) { view.innerHTML = notice(esc(d.hint || 'ниша не найдена')); return; }
+  const fresh = await api('/api/fresh-status').then((r) => r.niches.find((n) => n.niche === slug)).catch(() => null);
+  const freshBlock = fresh
+    ? `<div class="form-row"><button class="btn" id="freshBtn" type="button">Собрать свежее (${fresh.searchCost} поиск.)</button>
+         <span class="section-sub">${fresh.staleDays == null ? 'свежее ещё не собиралось'
+           : `последний сбор ${Math.round(fresh.staleDays)} дн. назад`}</span></div>`
+    : `<div class="section-sub">У ниши нет сохранённых запросов — свежее собрать не по чему.</div>`;
 
   let ctx = tagContext(tags);
   const key = `nf.scatter.${slug}`;
@@ -1178,8 +1190,20 @@ async function viewNiche(slug) {
   view.innerHTML = (d.found
     ? nicheOverviewBlock(d, sectionHead(`Ниша: ${slug}`, `${esc(d.query || '')} · ${plabel(state.period)}`))
     : notice(esc(d.hint || `за ${plabel(state.period)} роликов нет`)))
+    + freshBlock
     + `<div class="scatter-filters" id="scatterFilters"></div>
        <div id="scatterCard"></div><div id="tagStatsCard"></div><div id="tagTableCard"></div>`;
+
+  $('#freshBtn')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Собираю…';
+    try {
+      const r = await api(`/api/niches/${encodeURIComponent(slug)}/collect-fresh`, { method: 'POST', body: {} });
+      toast(`Свежее: ${r.videosStored} видео, ${r.quota.search_calls} поиск., догружено каналов: ${
+        r.channelsBackfilled.length}${r.hint ? ` — ${r.hint}` : ''}`, r.queriesSkipped.length ? 'err' : 'ok');
+      viewNiche(slug);
+    } catch (err) { toast(err.message, 'err'); btn.disabled = false; }
+  });
 
   function draw() {
     $('#scatterFilters').innerHTML = nicheScatterFilters(pts, opts, ctx);
@@ -1785,7 +1809,7 @@ const ROUTES = {
   overview: { title: 'Обзор', run: viewOverview },
   find: { title: 'Найти нишу', run: viewFind },
   viral: { title: 'Вирусные видео', run: viewViral },
-  channels: { title: 'Outlier-каналы', run: viewChannels },
+  channels: { title: 'Каналы на взлёте', run: viewChannels },
   categories: { title: 'Категории', run: viewCategories },
   keywords: { title: 'Ключевые слова', run: viewKeywords },
   tags: { title: 'Топ теги по категориям', run: viewTopTags },

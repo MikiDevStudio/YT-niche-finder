@@ -170,19 +170,26 @@ function strengthBar(level) {
 
 function channelRow(c) {
   const subs = c.subscribers === null ? 'подписчики скрыты' : `${compact(c.subscribers)} подписчиков`;
+  const age = c.channelAgeDays == null ? ''
+    : c.channelAgeDays < 365 ? ` · канал ${Math.max(1, Math.round(c.channelAgeDays / 30))} мес.`
+    : ` · канал ${(c.channelAgeDays / 365).toFixed(1)} г.`;
+  const hits = c.hitsInWindow != null ? ` · ${c.hitsInWindow} хит(ов) из ${c.videosInWindow}` : '';
+  const best = c.bestVideo
+    ? `<div class="row-sub">лучший: <a href="https://www.youtube.com/watch?v=${esc(c.bestVideo.videoId)}"
+         target="_blank" rel="noopener">${esc(c.bestVideo.title || '')}</a>${
+         c.bestVideo.publishedAt ? ` · ${ago(c.bestVideo.publishedAt)}` : ''}${
+         (c.bestVideo.tags || []).map((t) => ` <span class="chip">${esc(t.tag)}</span>`).join('')}</div>`
+    : '';
   return `<div class="row">
     <div class="avatar">${esc((c.channelTitle || '?').slice(0, 1).toUpperCase())}</div>
     <div class="row-main">
       <div class="row-title"><a href="#/channel/${esc(c.channelId)}">${esc(c.channelTitle || c.channelId)}</a></div>
-      <div class="row-sub">${subs}${c.category ? ` · ${esc(c.category)}` : ''}${
-        c.videosInWindow ? ` · ${c.videosInWindow} видео в окне` : ''}</div>
+      <div class="row-sub">${subs}${age}${hits}${c.category ? ` · ${esc(c.category)}` : ''}</div>
+      ${best}
     </div>
     <div class="row-metrics">
-      <div class="metric" data-tip="${c.multiplierBasis === 'lifetime-mean'
-        ? 'Посчитан против СРЕДНЕГО за всю жизнь канала (формула NexLev).&lt;br&gt;В базе слишком мало его видео для медианной базы — нужно 4+.&lt;br&gt;Такое число завышается одним виральным роликом: соберите канал целиком.'
-        : 'Лучший возрастно-нормированный множитель среди видео канала в окне.&lt;br&gt;Считается против медианы предыдущих загрузок этого же канала.'}">
-        <div class="metric-value">${mult(c.multiplier)}${
-          c.multiplierBasis === 'lifetime-mean' ? '<span class="approx">≈</span>' : ''}</div>
+      <div class="metric" data-tip="Рейтинг взлёта: сумма log2(множитель) по хитам канала (от 2x) в окне,&lt;br&gt;умноженная на бонус молодости (×${c.youthFactor ?? 1}).&lt;br&gt;Лучший множитель ${mult(c.multiplier)}, медианный ${mult(c.medianMultiplier)}.">
+        <div class="metric-value">${c.breakoutScore != null ? c.breakoutScore.toFixed(1) : mult(c.multiplier)}</div>
         ${strengthBar(c.strength)}
       </div>
     </div>

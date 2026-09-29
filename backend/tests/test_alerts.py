@@ -112,10 +112,10 @@ def seed():
         _channel(ch)
         _track(ch)
 
-    # 1. outlier: one video, 4x the channel-average views -- with no prior
-    #    upload on this channel, the per-history baseline is None, so
-    #    discovery.py's Nexlev channel-average fallback decides (see the
-    #    metadata_review fixture notes for why this is deterministic).
+    # 1. outlier: three older uploads at 500k give the channel its own
+    #    median; the new video is 4x that.
+    for k, days_ago in enumerate((7, 8, 9)):   # no gap: must not read as a silence break
+        _video(f"voutlierh{k}", CH_OUTLIER, "Старое видео", days_ago, 500_000)
     _video("voutlier1", CH_OUTLIER, "Огромный выброс", 5, 2_000_000)
 
     # 2. acceleration: view history that clearly speeds up in the last 24h
@@ -201,6 +201,17 @@ def _run_all():
             print(f"ERROR {name}: {e!r}")
     print(f"\n{passed}/{len(tests)} прошло")
     sys.exit(0 if passed == len(tests) else 1)  # иначе CI зеленеет при упавших тестах
+
+
+def test_single_video_channel_raises_no_outlier_alert():
+    reset()
+    lonely = "UClonelychannel000001"
+    _channel(lonely, videos=9951, views=57_700_000)
+    _track(lonely)
+    _video("vlonely1", lonely, "Old viral hit", 5, 13_900_000)
+    RAW.commit()
+    res = AL.scan(period="180d")
+    assert res["emitted"]["outlier"] == 0, res
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ OUTLIER_THRESHOLD_DEFAULT = 3.0
 
 
 def _outlier_score(r):
-    return r.get("outlierScoreAgeAdjusted") or r.get("outlierScore") or r.get("outlierScoreNexlev") or 0
+    return M.effective_outlier(r)
 
 
 def _top_phrase(rows, outlier_threshold):
@@ -103,7 +103,8 @@ def review_metadata(title: str, description: str = "", tags=None, niche: str = N
                               outlier_base=outlier_base)
     for r in rows:
         r["outlier"] = _outlier_score(r)
-    outlier_rows = [r for r in rows if r["outlier"] >= outlier_threshold]
+    outlier_rows = [r for r in rows
+                    if r["outlier"] is not None and r["outlier"] >= outlier_threshold]
     key_phrase = _top_phrase(rows, outlier_threshold) if rows else None
 
     signals = [
@@ -113,7 +114,9 @@ def review_metadata(title: str, description: str = "", tags=None, niche: str = N
         MD.description_signal(description, key_phrase=key_phrase),
     ]
 
-    struct_rows = [{"title": r["title"], "outlier": r["outlier"]} for r in rows]
+    # Unknown baseline is not "did not break out": judge structure on known rows only.
+    struct_rows = [{"title": r["title"], "outlier": r["outlier"]} for r in rows
+                   if r["outlier"] is not None]
     structural = MD.structural_lift(struct_rows, outlier_threshold=outlier_threshold)
     draft_features = MD.structural_features(title)
     for feat in structural:

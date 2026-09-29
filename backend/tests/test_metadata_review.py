@@ -93,6 +93,15 @@ def seed_channel(ch=CH, subs=50_000, videos=80, views=40_000_000):
         (ch, "AI Explainers", "@aiexplainers", subs, videos, views))
 
 
+def _seed_history(vch, views=500_000):
+    for k in range(3):
+        RAW.execute(
+            "INSERT OR REPLACE INTO videos (video_id, channel_id, title, tags, published_at,"
+            " view_count, duration_seconds, is_short) VALUES (?,?,?,?,?,?,?,0)",
+            (f"{vch}-h{k}", vch, "older upload", "[]",
+             iso(NOW - timedelta(days=300 + k)), views, 600))
+
+
 def seed_corpus(n_outliers=25, n_normal=25, niche=NICHE, ch=CH):
     """Outliers get a digit in the title and 40x the views of normal videos --
     both structural_lift and title-length signals need real separation to
@@ -100,19 +109,13 @@ def seed_corpus(n_outliers=25, n_normal=25, niche=NICHE, ch=CH):
 
     Each video lives on its OWN channel (all with identical channel-level
     totals: 40M views / 80 videos, matching seed_channel's defaults) rather
-    than sharing one channel's upload history. discovery.py's real outlier
-    score prefers a per-channel rolling-median baseline (`outlierScoreAgeAdjusted`
-    / `outlierScore`) over the flat channel-average fallback (`outlierScoreNexlev`)
-    -- with 50 videos crammed onto one channel that rolling baseline gets
-    contaminated by whichever outliers/normals happened to upload most
-    recently, which is a real property of that metric, not something this
-    fixture should fight. One channel per video keeps every video's baseline
-    at "no prior upload" (None), so the deterministic channel-average score
-    decides -- exactly the same number the real per-channel-baseline score
-    converges to once a channel has enough of its own history to no longer
-    need the fallback. `ch` (the CH constant) becomes outlier0000's channel,
-    so tests that filter or seed by CH still land on a real, niche-tagged
-    video.
+    than sharing one channel's upload history: with 50 videos crammed onto one
+    channel the rolling baseline gets contaminated by whichever outliers/normals
+    happened to upload most recently. Each channel gets three old uploads at
+    500k views, so its own median baseline is 500k -- the number the
+    lifetime-mean fallback used to produce -- and every multiplier below is
+    unchanged. `ch` (the CH constant) becomes outlier0000's channel, so tests
+    that filter or seed by CH still land on a real, niche-tagged video.
     """
     for i in range(n_outliers):
         vid = f"outlier{i:04d}"
@@ -128,6 +131,7 @@ def seed_corpus(n_outliers=25, n_normal=25, niche=NICHE, ch=CH):
             " view_count, duration_seconds, is_short) VALUES (?,?,?,?,?,?,?,0)",
             (vid, vch, title, "[]", iso(NOW - timedelta(days=10 + i)), 2_000_000, 600))
         RAW.execute("INSERT INTO video_niches (video_id, niche_slug) VALUES (?,?)", (vid, niche))
+        _seed_history(vch)
     for i in range(n_normal):
         vid = f"normal{i:04d}"
         vch = f"UCnormalch{i:04d}00000"
@@ -141,6 +145,7 @@ def seed_corpus(n_outliers=25, n_normal=25, niche=NICHE, ch=CH):
             " view_count, duration_seconds, is_short) VALUES (?,?,?,?,?,?,?,0)",
             (vid, vch, title, "[]", iso(NOW - timedelta(days=10 + i)), 50_000, 600))
         RAW.execute("INSERT INTO video_niches (video_id, niche_slug) VALUES (?,?)", (vid, niche))
+        _seed_history(vch)
     RAW.commit()
 
 

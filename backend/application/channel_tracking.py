@@ -457,8 +457,7 @@ def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d
                               outlier_base=outlier_base)
     shaped = [{"video_id": r["video_id"], "title": r["title"], "tags": r["tags"],
                "views": r["view_count"] or 0,
-               "outlier": r["outlierScoreAgeAdjusted"] or r["outlierScore"]
-               or r["outlierScoreNexlev"]} for r in rows]
+               "outlier": M.effective_outlier(r)} for r in rows]
     stats, total, base = K.aggregate(shaped, use_tags=False, use_title=True,
                                      n_max=3, outlier_threshold=outlier_threshold)
     ranked = K.score(stats, total, base, min_videos=min_videos, top_n=top_n, sort_by="lift")
@@ -466,6 +465,7 @@ def title_patterns(niche: str = None, channel_id: str = None, period: str = "90d
         "period": period, "niche": niche, "channelId": channel_id,
         "outlierBase": outlier_base,
         "videosAnalysed": total,
+        "videosWithoutBaseline": sum(1 for s in shaped if s["outlier"] is None),
         "outlierBaseRatePercent": round(base * 100, 2),
         "patterns": [{k: p[k] for k in ("keyword", "videos", "outlierLift",
                                         "medianOutlier", "medianViews", "examples")}

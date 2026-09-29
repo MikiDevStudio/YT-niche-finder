@@ -36,7 +36,7 @@ def search_outliers(query: str = None, niche: str = None, languages: list = None
         rows = [r for r in rows if (r["ch_video_count"] or 0) <= max_channel_video_count]
     if min_outlier_score:
         rows = [r for r in rows
-                if (r["outlierScore"] or r["outlierScoreNexlev"] or 0) >= min_outlier_score]
+                if (M.effective_outlier(r, age_adjusted=False) or 0) >= min_outlier_score]
     if min_video_length is not None:
         rows = [r for r in rows if (r["duration_seconds"] or 0) >= min_video_length]
     if max_video_length is not None:

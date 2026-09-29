@@ -962,6 +962,142 @@ def test_collect_niche_remembers_every_query_of_a_niche(monkeypatch):
     assert all(r["language"] == "en" and r["last_fresh_at"] is None for r in rows)
 
 
+def _fresh_setup(monkeypatch, slug, queries, served=None):
+    _no_network(monkeypatch)
+    conn = db.get_conn()
+    for q in queries:
+        db.add_niche_query(conn, slug, q, "en")
+    conn.commit()
+    conn.close()
+    calls = [] if served is None else served
+
+    def fake_search(k, query, published_after=None, order=None, page_token=None, **kw):
+        calls.append({"query": query, "after": published_after, "order": order, "page": page_token})
+        n = len(calls)
+        return {"items": [{"id": {"videoId": f"vfresh{slug}{n}"}}], "nextPageToken": "more"}
+
+    monkeypatch.setattr(yt, "search_videos", fake_search)
+    return calls
+
+
+def test_collect_fresh_searches_by_date_from_the_last_fresh_run(monkeypatch):
+    slug = "fresh-a"
+    calls = _fresh_setup(monkeypatch, slug, ["q one", "q two"])
+    cid = "UCfreshchannel000000001"
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items", lambda k, pl, max_items=200: ([], 1))
+
+    out = collector.collect_fresh("test-key", slug, embed=False)
+
+    assert [c["query"] for c in calls] == ["q one", "q two"]
+    assert all(c["order"] == "date" and c["page"] is None for c in calls), "one page, by date"
+    first_after = P.parse_iso(calls[0]["after"])
+    assert 29 <= (P.now() - first_after).days <= 30, "first fresh run looks 30 days back"
+    assert out["quota"]["search_calls"] == 2
+
+    # second run starts where the first one ended
+    calls.clear()
+    collector.collect_fresh("test-key", slug, embed=False)
+    assert (P.now() - P.parse_iso(calls[0]["after"])).total_seconds() < 600
+
+
+def test_collect_fresh_backfills_a_channel_without_its_own_baseline(monkeypatch):
+    slug = "fresh-b"
+    _fresh_setup(monkeypatch, slug, ["q backfill"])
+    cid = "UCfreshbackfill00000001"
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    monkeypatch.setattr(yt, "channels_list",
+                        lambda k, ids, **kw: [_api_channel(cid, uploads="UUfreshbackfill")])
+    asked = []
+
+    def fake_playlist(k, pl, max_items=200):
+        asked.append((pl, max_items))
+        return [{"video_id": f"vbackfill{i}"} for i in range(5)], 1
+
+    monkeypatch.setattr(yt, "playlist_items", fake_playlist)
+    out = collector.collect_fresh("test-key", slug, embed=False)
+    assert asked == [("UUfreshbackfill", collector.FRESH_BACKFILL_VIDEOS)]
+    assert out["channelsBackfilled"] == [cid]
+    assert _count("SELECT COUNT(*) FROM videos WHERE channel_id=?", (cid,)) >= 6
+
+
+def test_collect_fresh_runs_only_what_the_quota_allows(monkeypatch):
+    slug = "fresh-c"
+    calls = _fresh_setup(monkeypatch, slug, ["c1", "c2", "c3"])
+    cid = "UCfreshquota0000000001"
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items", lambda k, pl, max_items=200: ([], 1))
+    conn = db.get_conn()
+    left = yt.SEARCH_DAILY_CALL_LIMIT - collector.search_calls_today(conn)
+    collector._record_search_calls(conn, left - 1)       # leave exactly one call
+    conn.commit()
+    conn.close()
+
+    try:
+        out = collector.collect_fresh("test-key", slug, embed=False)
+        assert len(calls) == 1
+        assert out["queriesSkipped"] == ["c2", "c3"]
+        assert "пропущено 2" in out["hint"], out["hint"]
+    finally:
+        conn = db.get_conn()
+        db.set_meta(conn, f"search_calls_{P.pacific_date_key()}", 0)   # give later tests their quota back
+        conn.commit()
+        conn.close()
+
+
+def test_collect_fresh_on_a_niche_without_queries_spends_nothing(monkeypatch):
+    _no_network(monkeypatch)
+    out = collector.collect_fresh("test-key", "no-queries-niche")
+    assert out["quota"]["search_calls"] == 0
+    assert out["queriesRun"] == []
+    assert "запрос" in out["hint"]
+
+
+def test_collect_fresh_keeps_progress_when_quota_runs_out_midway(monkeypatch):
+    slug = "fresh-d"
+    _no_network(monkeypatch)
+    conn = db.get_conn()
+    for q in ("d1", "d2"):
+        db.add_niche_query(conn, slug, q, "en")
+    conn.commit()
+    conn.close()
+    cid = "UCfreshmidway000000001"
+    state = {"n": 0}
+
+    def flaky(k, query, **kw):
+        state["n"] += 1
+        if state["n"] == 2:
+            raise yt.QuotaExceeded("bucket empty")
+        return {"items": [{"id": {"videoId": "vmidway1"}}]}
+
+    monkeypatch.setattr(yt, "search_videos", flaky)
+    monkeypatch.setattr(yt, "videos_list", lambda k, ids, **kw: [_api_video(v, cid) for v in ids])
+    monkeypatch.setattr(yt, "channels_list", lambda k, ids, **kw: [_api_channel(cid)])
+    monkeypatch.setattr(yt, "playlist_items", lambda k, pl, max_items=200: ([], 1))
+
+    out = collector.collect_fresh("test-key", slug, embed=False)
+    assert [q["query"] for q in out["queriesRun"]] == ["d1"]
+    assert out["queriesSkipped"] == ["d2"]
+    conn = db.get_conn()
+    fresh = {r["query"]: r["last_fresh_at"] for r in db.niche_queries(conn, slug)}
+    conn.close()
+    assert fresh["d1"] is not None and fresh["d2"] is None
+
+
+def test_fresh_status_flags_stale_niches(monkeypatch):
+    _no_network(monkeypatch)
+    conn = db.get_conn()
+    db.add_niche_query(conn, "fresh-stale", "old query", "en")
+    db.mark_query_fresh(conn, "fresh-stale", "old query",
+                        P.to_rfc3339(P.now() - __import__("datetime").timedelta(days=6)))
+    conn.commit()
+    conn.close()
+    row = next(r for r in collector.fresh_status() if r["niche"] == "fresh-stale")
+    assert row["stale"] is True and row["staleDays"] >= 6 and row["searchCost"] == 1
+
+
 if __name__ == "__main__":
     setup_module()
 

@@ -115,20 +115,24 @@ def literal_tags_for_video(row) -> set:
 
 def aggregate(rows, use_tags=True, use_title=True, n_max=3, outlier_threshold=3.0,
               phrase_fn=None):
-    """rows: dicts with title/tags/views/outlier/vsr. Returns per-phrase stats.
+    """rows: dicts with title/tags/views/outlier/vsr; outlier None = unknown baseline.
+    Returns per-phrase stats.
 
     phrase_fn overrides how a video's phrases are derived (default: N-gram
     phrases via phrases_for_video) -- e.g. literal_tags_for_video for
     whole-tag aggregation instead of tokenized N-grams."""
     get_phrases = phrase_fn or (lambda row: phrases_for_video(row, use_tags, use_title, n_max))
     stats = defaultdict(lambda: {"videos": 0, "views": 0, "view_list": [],
-                                 "outliers": [], "hits": 0, "examples": [],
+                                 "outliers": [], "hits": 0, "known": 0, "examples": [],
                                  "video_ids": set()})
     total_videos = 0
     total_hits = 0
+    total_known = 0
     for row in rows:
         total_videos += 1
-        is_hit = (row.get("outlier") or 0) >= outlier_threshold
+        known = row.get("outlier") is not None
+        is_hit = known and row["outlier"] >= outlier_threshold
+        total_known += 1 if known else 0
         total_hits += 1 if is_hit else 0
         for phrase in get_phrases(row):
             s = stats[phrase]
@@ -136,7 +140,8 @@ def aggregate(rows, use_tags=True, use_title=True, n_max=3, outlier_threshold=3.
             s["video_ids"].add(row.get("video_id"))
             s["views"] += row.get("views") or 0
             s["view_list"].append(row.get("views") or 0)
-            if row.get("outlier") is not None:
+            if known:
+                s["known"] += 1
                 s["outliers"].append(row["outlier"])
             if is_hit:
                 s["hits"] += 1
@@ -144,7 +149,9 @@ def aggregate(rows, use_tags=True, use_title=True, n_max=3, outlier_threshold=3.
                 s["examples"].append({"videoId": row.get("video_id"),
                                       "title": row.get("title"),
                                       "views": row.get("views")})
-    base_rate = (total_hits / total_videos) if total_videos else 0.0
+    # Unknown baseline is not "did not break out": the base rate is over the
+    # rows we can actually judge.
+    base_rate = (total_hits / total_known) if total_known else 0.0
     return stats, total_videos, base_rate
 
 
@@ -202,13 +209,15 @@ def score(stats, total_videos, base_rate, prev_stats=None, prev_total=0,
         p_now = (s["videos"] + 0.5) / (total_videos + 1) if total_videos else 0.0
         p_prev = (prev_count + 0.5) / (prev_total + 1) if prev_total else None
         momentum = round(min(p_now / p_prev, 99.0), 2) if p_prev else None
-        hit_rate = s["hits"] / s["videos"]
-        lift = round(hit_rate / base_rate, 2) if base_rate > 0 else None
+        known = s.get("known", s["videos"])
+        hit_rate = (s["hits"] / known) if known else None
+        lift = round(hit_rate / base_rate, 2) if hit_rate is not None and base_rate > 0 else None
         med_views = int(st.median(s["view_list"])) if s["view_list"] else 0
         med_outlier = round(st.median(s["outliers"]), 2) if s["outliers"] else None
         out.append({
             "keyword": phrase,
             "videos": s["videos"],
+            "videosWithBaseline": known,
             "isNew": prev_stats is not None and prev is None,
             "share": round(share * 100, 2),
             "previousShare": round(prev_share * 100, 2) if prev_stats is not None else None,

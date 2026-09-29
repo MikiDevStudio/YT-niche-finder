@@ -1098,6 +1098,15 @@ def test_fresh_status_flags_stale_niches(monkeypatch):
     assert row["stale"] is True and row["staleDays"] >= 6 and row["searchCost"] == 1
 
 
+def test_collect_fresh_tool_calls_the_use_case(monkeypatch):
+    got = {}
+    monkeypatch.setattr(collector, "collect_fresh",
+                        lambda key, niche, **kw: got.update(key=key, niche=niche) or {"niche": niche})
+    out = srv.collect_fresh("some-niche")
+    assert out == {"niche": "some-niche"} and got == {"key": "test-key", "niche": "some-niche"}
+    assert isinstance(srv.fresh_status(), list)
+
+
 if __name__ == "__main__":
     setup_module()
 

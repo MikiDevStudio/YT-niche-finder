@@ -78,6 +78,29 @@ def collect_niche(query: str, label: str = None, language: str = None,
 @mcp.tool(annotations=ToolAnnotations(
     read_only_hint=False, destructive_hint=False,
     idempotent_hint=False, open_world_hint=True))
+def collect_fresh(niche: str) -> dict:
+    """Collect videos a niche published since its last fresh run.
+
+    COSTS ONE OF YOUR 100 DAILY SEARCH CALLS PER STORED QUERY of the niche
+    (fresh_status shows the cost first). Searches by date, not views, so the
+    result is what came out recently; channels of fresh videos without enough
+    uploads in the database are backfilled (~1 unit each) so their hits count.
+    """
+    _require_key()
+    return collector.collect_fresh(API_KEY, niche)
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=True, destructive_hint=False,
+    idempotent_hint=True, open_world_hint=False))
+def fresh_status() -> list:
+    """Niches with stored queries: days since the last fresh run and its search cost."""
+    return collector.fresh_status()
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    read_only_hint=False, destructive_hint=False,
+    idempotent_hint=False, open_world_hint=True))
 def collect_trending(regions: list = None, category_ids: list = None,
                      pages: int = 2) -> dict:
     """Snapshot YouTube's own mostPopular chart into the local DB. 1 unit/page.

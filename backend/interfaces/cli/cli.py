@@ -4,12 +4,14 @@
     python cli.py doctor                      проверка ключа, сети, базы
     python cli.py collect-channel @handle     собрать канал (дёшево)
     python cli.py collect "ai automation" --period 24h
+    python cli.py collect-fresh garden-en     свежее по нише (1 поиск на запрос)
+    python cli.py fresh-status                когда по нишам собиралось свежее
     python cli.py refresh                     обновить счётчики (история)
     python cli.py embed-videos                досчитать эмбеддинги (0 quota)
     python cli.py viral --period 24h
     python cli.py categories --period 7d --rank-by channels
     python cli.py keywords --period 24h
-    python cli.py channels --period 24h       outlier-каналы
+    python cli.py channels --period 24h       каналы на взлёте
     python cli.py export-niche brain --out videos.tsv   ниша в TSV
     python cli.py autotag brain --dry-run     разметка тегами через LLM
     python cli.py stats
@@ -137,6 +139,16 @@ def cmd_collect(args):
                                 embed=args.embed))
 
 
+def cmd_collect_fresh(args):
+    from application import collecting as collector
+    out(collector.collect_fresh(_key(), args.niche))
+
+
+def cmd_fresh_status(args):
+    from application import collecting as collector
+    out(collector.fresh_status())
+
+
 def cmd_refresh(args):
     from application import collecting as collector
     out(collector.refresh_stats(_key(), scope=args.scope, period=args.period,
@@ -259,6 +271,11 @@ def main():
     p.add_argument("--pages", type=int, default=1)
     p.add_argument("--embed", action="store_true", default=True)
     p.set_defaults(fn=cmd_collect)
+
+    p = sub.add_parser("collect-fresh", help="свежее по нише: 1 поиск на запрос, с прошлого сбора")
+    p.add_argument("niche")
+    p.set_defaults(fn=cmd_collect_fresh)
+    sub.add_parser("fresh-status", help="когда по нишам собиралось свежее").set_defaults(fn=cmd_fresh_status)
 
     p = sub.add_parser("refresh", help="обновить счётчики и дописать историю")
     p.add_argument("--scope", default="recent", choices=["recent", "tracked", "niche", "all"])

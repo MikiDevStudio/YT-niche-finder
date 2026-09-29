@@ -202,11 +202,13 @@ def test_channel_level_discovery():
     r = T.recently_added_outlier_channels(period="30d", min_multiplier=1.0)
     assert r["channelsMatched"] > 0
     top = r["channels"][0]
-    for field in ("multiplier", "strength", "band", "subscribers", "bestVideo"):
+    for field in ("multiplier", "strength", "band", "subscribers", "bestVideo",
+                  "breakoutScore", "youthFactor", "hitsInWindow", "videosInDb"):
         assert field in top, field
     assert 0 <= top["strength"] <= 4
-    mults = [c["multiplier"] for c in r["channels"]]
-    assert mults == sorted(mults, reverse=True)
+    scores = [c["breakoutScore"] for c in r["channels"]]
+    assert scores == sorted(scores, reverse=True)
+    assert "multiplierBasis" not in top
 
     h = T.high_future_competition(period="90d", min_videos=2)
     assert h["byCategory"] and h["channels"]

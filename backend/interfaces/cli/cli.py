@@ -319,10 +319,9 @@ def main():
     p.add_argument("--min-videos", type=int, default=3)
     p.set_defaults(fn=cmd_keywords)
 
-    p = period_args(sub.add_parser("channels", help="недавно добавленные outlier-каналы"), "24h")
+    p = period_args(sub.add_parser("channels", help="каналы на взлёте"), "24h")
     p.add_argument("--min-multiplier", type=float, default=2.0)
     p.set_defaults(fn=cmd_channels)
-    p.set_defaults(period_by="discovered")
 
     args = ap.parse_args()
     sys.exit(args.fn(args) or 0)

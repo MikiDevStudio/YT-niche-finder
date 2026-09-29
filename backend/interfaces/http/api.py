@@ -238,7 +238,7 @@ def top_tags_by_category(period: str = "7d", period_by: str = "published", niche
 
 
 @app.get("/api/outlier-channels")
-def outlier_channels(period: str = "24h", period_by: str = "discovered",
+def outlier_channels(period: str = "24h", period_by: str = "published",
                      min_multiplier: float = 2.0, max_subscribers: int = None,
                      min_subscribers: int = None,
                      niche: str = None, limit: int = 25, outlier_base: str = "rolling"):
@@ -287,7 +287,7 @@ def overview(period: str = "24h", niche: str = None, outlier_base: str = "rollin
         "coverage": trends.coverage(period),
         "stats": Q.db_stats(),
         "outlierChannels": T.recently_added_outlier_channels(
-            period=period, period_by="discovered", min_multiplier=1.5,
+            period=period, min_multiplier=1.5,
             niche=niche, limit=6, outlier_base=base),
         "competition": T.high_future_competition(period=wide, niche=niche, limit=6,
                                                  outlier_base=base),

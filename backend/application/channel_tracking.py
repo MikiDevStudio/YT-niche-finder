@@ -526,23 +526,48 @@ def calibrate_maturity_curve(min_videos: int = 30) -> dict:
 # are channel-scoped rather than video-scoped: "Recently Added Outlier Channels"
 # and "Niches with High Future Competition".
 
-def _channel_rows_from_videos(rows):
-    """Group enriched video rows by channel and summarise each channel."""
+def _channel_rows_from_videos(rows, conn=None):
+    """Group enriched video rows by channel and summarise each channel.
+
+    Only videos with a baseline built from the channel's own uploads count
+    (M.effective_outlier). A channel with none of those in the window has no
+    known level to break out of and is returned in `skipped`, not in `out`.
+    """
     by_channel = defaultdict(list)
     for r in rows:
         by_channel[r["channel_id"]].append(r)
-    out = []
+
+    own = conn or db.get_conn()
+    try:
+        ids = list(by_channel)
+        stored, created, tags = {}, {}, defaultdict(list)
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in own.execute(f"SELECT channel_id, COUNT(*) AS n FROM videos "
+                                 f"WHERE channel_id IN ({marks}) GROUP BY channel_id", chunk).fetchall():
+                stored[r["channel_id"]] = r["n"]
+            for r in own.execute(f"SELECT channel_id, published_at FROM channels "
+                                 f"WHERE channel_id IN ({marks})", chunk).fetchall():
+                created[r["channel_id"]] = r["published_at"]
+    finally:
+        if conn is None:
+            own.close()
+
+    out, skipped = [], 0
     for cid, vids in by_channel.items():
+        judged = [(v, M.effective_outlier(v)) for v in vids]
+        judged = [(v, m) for v, m in judged if m is not None]
+        if not judged:
+            skipped += 1
+            continue
         first = vids[0]
         views = [v["view_count"] or 0 for v in vids]
-        # Медианная база требует минимум 4 загрузок канала в базе. Если их нет,
-        # падаем на пожизненное среднее (формула NexLev) — число получается
-        # другого качества, поэтому помечаем, а не делаем вид, что оно то же.
-        has_median = any(v["outlierScore"] is not None for v in vids)
-        mults = [v["outlierScoreAgeAdjusted"] or v["outlierScore"]
-                 or v["outlierScoreNexlev"] or 0 for v in vids]
-        best = max(vids, key=lambda v: (v["outlierScoreAgeAdjusted"]
-                                        or v["outlierScore"] or 0))
+        mults = [m for _, m in judged]
+        best, best_m = max(judged, key=lambda vm: vm[1])
+        born = _dt(created.get(cid))
+        age_days = round((P.now() - born).total_seconds() / 86400) if born else None
+        youth = M.youth_factor(age_days)
         out.append({
             "channelId": cid,
             "channelTitle": first["channel_title"],
@@ -553,22 +578,45 @@ def _channel_rows_from_videos(rows):
             "country": first["channel_country"],
             "category": first["category"],
             "categoryId": first["category_id"],
+            "channelAgeDays": age_days,
             "videosInWindow": len(vids),
+            "hitsInWindow": sum(1 for m in mults if m >= M.BREAKOUT_HIT_THRESHOLD),
             "medianViewsInWindow": int(st.median(views)) if views else 0,
             "maxViewsInWindow": max(views) if views else 0,
-            "multiplier": round(max(mults), 2) if mults else None,
-            "multiplierBasis": "median" if has_median else "lifetime-mean",
-            "videosInDb": first["ch_video_count"],
-            "medianMultiplier": round(st.median(mults), 2) if mults else None,
+            "multiplier": round(best_m, 2),
+            "medianMultiplier": round(st.median(mults), 2),
+            "breakoutScore": M.breakout_score(mults, youth),
+            "youthFactor": youth,
+            "videosInDb": stored.get(cid, len(vids)),
             "medianViewsPerSubscriber": round(
                 st.median([v["viewsPerSubscriber"] for v in vids]), 3),
             "bestVideo": {"videoId": best["video_id"], "title": best["title"],
                           "views": best["view_count"],
                           "publishedAt": best["published_at"],
-                          "vph": best["vphLifetime"]},
+                          "vph": best["vphLifetime"],
+                          "tags": []},
             "_rows": vids,
         })
-    return out
+    _attach_best_video_tags(out)
+    return out, skipped
+
+
+def _attach_best_video_tags(channels):
+    """Topic tags of each channel's best video, in one query: what the hit was about."""
+    if not channels:
+        return
+    conn = db.get_conn()
+    try:
+        best_ids = [c["bestVideo"]["videoId"] for c in channels]
+        marks = ",".join("?" * len(best_ids))
+        by_video = defaultdict(list)
+        for r in conn.execute(f"SELECT video_id, tag_group, tag FROM video_tags "
+                              f"WHERE video_id IN ({marks}) ORDER BY tag_group, tag", best_ids).fetchall():
+            by_video[r["video_id"]].append({"group": r["tag_group"], "tag": r["tag"]})
+    finally:
+        conn.close()
+    for c in channels:
+        c["bestVideo"]["tags"] = by_video.get(c["bestVideo"]["videoId"], [])
 
 
 def _strength(multiplier):
@@ -581,19 +629,20 @@ def _strength(multiplier):
     return 4
 
 
-def recently_added_outlier_channels(period: str = "24h", period_by: str = "discovered",
+def recently_added_outlier_channels(period: str = "24h", period_by: str = "published",
                                     min_multiplier: float = 2.0,
                                     max_subscribers: int = None,
                                     min_subscribers: int = None, niche: str = None,
                                     category_id: str = None, region: str = None,
                                     exclude_shorts: bool = True, limit: int = 25,
                                     outlier_base: str = "rolling") -> dict:
-    """Channels that showed up in the corpus recently AND are outperforming.
+    """Channels breaking out now: videos published in the window that beat the
+    median of the channel's own uploads, ranked by breakoutScore.
 
-    The channel-level counterpart to viral_videos_small_channels. Defaults to
-    period_by="discovered" because "recently added" is about when WE first saw
-    the channel, not when it uploaded -- which is also why NexLev's own
-    "Last 24 Hours" list is full of year-old videos.
+    The channel-level counterpart to viral_videos_small_channels. The window is
+    by publication date by default; period_by="discovered" (when WE first stored
+    the video) is kept for NexLev parity only -- it fills the list with old hits
+    that a search happened to find recently.
     """
     from application import discovery as trends
     outlier_base = M.check_outlier_base(outlier_base)
@@ -603,28 +652,35 @@ def recently_added_outlier_channels(period: str = "24h", period_by: str = "disco
                               min_subscribers=min_subscribers,
                               exclude_shorts=exclude_shorts,
                               outlier_base=outlier_base)
-    channels = _channel_rows_from_videos(rows)
+    channels, skipped = _channel_rows_from_videos(rows)
     for ch in channels:
         ch.pop("_rows", None)
         ch["strength"] = _strength(ch["multiplier"])
         ch["band"] = M.outlier_band(ch["multiplier"])
     before = len(channels)
-    channels = [c for c in channels
-                if (c["multiplier"] or 0) >= min_multiplier]
-    channels.sort(key=lambda c: c["multiplier"] or 0, reverse=True)
+    channels = [c for c in channels if (c["multiplier"] or 0) >= min_multiplier]
+    channels.sort(key=lambda c: (c["breakoutScore"], c["multiplier"]), reverse=True)
     hint = None
     if not channels:
-        hint = (f"Ни один из {before} каналов в окне не дотянул до множителя "
-                f"{min_multiplier} — понизьте min_multiplier." if before else
-                f"В окне {period} по '{period_by}' нет видео — сначала соберите корпус. "
-                f"Множитель считается по медиане предыдущих загрузок канала, поэтому "
-                f"каналу нужно минимум 4 видео в базе.")
+        if before:
+            hint = (f"Ни один из {before} каналов в окне не дотянул до множителя "
+                    f"{min_multiplier} -- понизьте min_multiplier.")
+        elif skipped:
+            hint = (f"В окне {skipped} каналов, но ни у одного нет своей нормы "
+                    f"(меньше 4 его роликов в базе). Соберите свежее по нише -- "
+                    f"кнопка догружает такие каналы.")
+        else:
+            hint = (f"В окне {period} по '{period_by}' нет роликов -- соберите свежее.")
     return {
         "period": period, "periodBy": period_by,
         "minMultiplier": min_multiplier, "hint": hint, "outlierBase": outlier_base,
-        "channelsMatched": len(channels), "quotaUsed": 0,
-        "legend": {"multiplier": "best age-adjusted outlier among the channel's "
-                                 "videos in this window",
+        "channelsMatched": len(channels), "channelsWithoutBaseline": skipped,
+        "quotaUsed": 0,
+        "legend": {"breakoutScore": "sum of log2(multiplier) over the channel's hits (>=2x) "
+                                    "in the window, times youthFactor",
+                   "youthFactor": "<180 days x2, <1 year x1.5, <3 years x1, older x0.6",
+                   "multiplier": "best multiplier among the channel's videos in the window, "
+                                 "against the median of its own uploads",
                    "strength": "0-4 bar: <2x, 2-3x, 3-5x, 5-10x, >10x"},
         "channels": channels[:limit],
     }
@@ -653,7 +709,7 @@ def high_future_competition(period: str = "30d", period_by: str = "published",
     rows = trends.load_window(period=period, period_by=period_by, niche=niche,
                               region=region, category_id=category_id,
                               exclude_shorts=True, outlier_base=outlier_base)
-    channels = _channel_rows_from_videos(rows)
+    channels, _ = _channel_rows_from_videos(rows)
 
     conn = db.get_conn()
     ages = {r["channel_id"]: r["published_at"] for r in conn.execute(
@@ -667,10 +723,7 @@ def high_future_competition(period: str = "30d", period_by: str = "published",
             continue
         created = _dt(ages.get(ch["channelId"]))
         age_days = ((P.now() - created).total_seconds() / 86400) if created else None
-        youth = 1.0
-        if age_days is not None:
-            youth = 2.0 if age_days < 180 else 1.5 if age_days < 365 else \
-                1.0 if age_days < 1095 else 0.6
+        youth = M.youth_factor(age_days)
         med = ch["medianMultiplier"] or 0
         ch["channelAgeDays"] = round(age_days) if age_days else None
         ch["uploadsInWindow"] = ch["videosInWindow"]
